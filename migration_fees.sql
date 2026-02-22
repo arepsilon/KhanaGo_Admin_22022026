@@ -1,0 +1,1 @@
+ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS commission_percent DECIMAL(5, 2) DEFAULT 15.00; ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS platform_fee_per_order DECIMAL(10, 2) DEFAULT 5.00; ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS transaction_charge_percent DECIMAL(5, 2) DEFAULT 2.50;
