@@ -32,6 +32,17 @@ export default function OrdersTable() {
                     fetchOrders();
                 }
             )
+            .on(
+                'postgres_changes',
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'deliveries',
+                },
+                () => {
+                    fetchOrders();
+                }
+            )
             .subscribe();
 
         return () => {
@@ -289,13 +300,19 @@ export default function OrdersTable() {
                                             <div>
                                                 <p className="text-gray-500">Total Amount</p>
                                                 <p className="font-bold text-lg text-orange-600">₹{order.total.toFixed(2)}</p>
-                                                {order.delivery?.rider && (
-                                                    <div className="mt-2 p-2 bg-cyan-50 border border-cyan-100 rounded-lg">
-                                                        <p className="text-[10px] text-cyan-600 font-bold uppercase tracking-wider">Assigned Rider</p>
-                                                        <p className="text-sm font-semibold text-cyan-800">{order.delivery.rider.full_name}</p>
-                                                        <p className="text-[10px] text-cyan-600">{order.delivery.rider.phone}</p>
-                                                    </div>
-                                                )}
+                                                {(() => {
+                                                    const delivery = Array.isArray(order.delivery) ? order.delivery[0] : order.delivery;
+                                                    const rider = delivery?.rider;
+                                                    if (!rider) return null;
+
+                                                    return (
+                                                        <div className="mt-2 p-2 bg-cyan-50 border border-cyan-100 rounded-lg">
+                                                            <p className="text-[10px] text-cyan-600 font-bold uppercase tracking-wider">Assigned Rider</p>
+                                                            <p className="text-sm font-semibold text-cyan-800">{rider.full_name}</p>
+                                                            <p className="text-[10px] text-cyan-600">{rider.phone}</p>
+                                                        </div>
+                                                    );
+                                                })()}
                                                 {(order.status === 'cancelled' || order.status === 'rejected') && (
                                                     <div className="mt-2 text-sm">
                                                         <span className="text-gray-500 block mb-1">
@@ -403,6 +420,16 @@ export default function OrdersTable() {
                                                 <span className="text-gray-600">Delivery Fee</span>
                                                 <span className="font-medium">₹{order.delivery_fee.toFixed(2)}</span>
                                             </div>
+                                            <div className="flex justify-between py-2">
+                                                <span className="text-gray-600">Platform Fee</span>
+                                                <span className="font-medium">₹{(order.platform_fee || 0).toFixed(2)}</span>
+                                            </div>
+                                            {(order.discount_amount > 0) && (
+                                                <div className="flex justify-between py-2">
+                                                    <span className="text-green-600 font-medium">Discount</span>
+                                                    <span className="text-green-600 font-medium">-₹{order.discount_amount.toFixed(2)}</span>
+                                                </div>
+                                            )}
 
                                             <div className="flex justify-between py-3 border-t border-gray-200 mt-2">
                                                 <span className="font-bold text-gray-900">Total</span>
