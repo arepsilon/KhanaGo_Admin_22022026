@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import DateRangePicker from './DateRangePicker';
 
 export default function AnalyticsDashboard() {
     const [analytics, setAnalytics] = useState<any>({
@@ -22,16 +23,18 @@ export default function AnalyticsDashboard() {
     });
 
     const [loading, setLoading] = useState(true);
+    const [startDate, setStartDate] = useState('');
+    const [endDate, setEndDate] = useState('');
     const supabase = createClient();
 
     useEffect(() => {
         fetchAnalytics();
-    }, []);
+    }, [startDate, endDate]);
 
     const fetchAnalytics = async () => {
         try {
             // Fetch all orders with restaurant details and fee settings
-            const { data: orders } = await supabase
+            let query = supabase
                 .from('orders')
                 .select(`
                     *,
@@ -42,6 +45,15 @@ export default function AnalyticsDashboard() {
                         transaction_charge_percent
                     )
                 `);
+
+            if (startDate) {
+                query = query.gte('created_at', `${startDate}T00:00:00Z`);
+            }
+            if (endDate) {
+                query = query.lte('created_at', `${endDate}T23:59:59Z`);
+            }
+
+            const { data: orders } = await query;
 
             // Fetch customers count
             const { count: customersCount } = await supabase
@@ -156,6 +168,14 @@ export default function AnalyticsDashboard() {
 
     return (
         <div className="space-y-8">
+            <DateRangePicker
+                startDate={startDate}
+                endDate={endDate}
+                onStartChange={setStartDate}
+                onEndChange={setEndDate}
+                label="Analytics Period"
+            />
+
             {/* Admin Earnings Section */}
             <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-xl shadow-lg p-6 text-white">
                 <h3 className="text-xl font-bold mb-6 flex items-center gap-2">

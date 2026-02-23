@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 
-export default function RecentOrders() {
+export default function RecentOrders({ startDate, endDate }: { startDate?: string; endDate?: string }) {
     const [orders, setOrders] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const supabase = createClient();
@@ -30,17 +30,26 @@ export default function RecentOrders() {
         return () => {
             supabase.removeChannel(channel);
         };
-    }, []);
+    }, [startDate, endDate]);
 
     const fetchOrders = async () => {
         try {
-            const { data, error } = await supabase
+            let query = supabase
                 .from('orders')
                 .select(`
                     *,
                     restaurant:restaurants(name),
                     customer:profiles!customer_id(full_name, orders(count))
-                `)
+                `);
+
+            if (startDate) {
+                query = query.gte('created_at', `${startDate}T00:00:00Z`);
+            }
+            if (endDate) {
+                query = query.lte('created_at', `${endDate}T23:59:59Z`);
+            }
+
+            const { data, error } = await query
                 .order('created_at', { ascending: false })
                 .limit(10);
 
@@ -129,13 +138,13 @@ export default function RecentOrders() {
                                             const orderCount = order.customer?.orders?.[0]?.count || 0;
                                             if (orderCount === 1) {
                                                 return (
-                                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800">
+                                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-black">
                                                         New
                                                     </span>
                                                 );
                                             }
                                             return (
-                                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-700">
+                                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-black">
                                                     Existing
                                                 </span>
                                             );

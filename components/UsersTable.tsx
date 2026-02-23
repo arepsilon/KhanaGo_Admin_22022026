@@ -30,6 +30,21 @@ export default function UsersTable() {
         setLoading(false);
     };
 
+    const handleToggleTesterStatus = async (id: string, currentStatus: boolean) => {
+        try {
+            const { error } = await supabase
+                .from('profiles')
+                .update({ is_tester: !currentStatus })
+                .eq('id', id);
+
+            if (error) throw error;
+            fetchUsers();
+        } catch (error: any) {
+            console.error('Error updating tester status:', error.message);
+            alert('Failed to update tester status');
+        }
+    };
+
     if (loading) {
         return (
             <div className="bg-white rounded-xl shadow-sm p-6">
@@ -59,6 +74,7 @@ export default function UsersTable() {
                         <tr>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">User</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Contact</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tester Status</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total Orders</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Joined</th>
                         </tr>
@@ -80,6 +96,17 @@ export default function UsersTable() {
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap">
                                     <div className="text-sm text-gray-900">{user.phone || '-'}</div>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                    <button
+                                        onClick={() => handleToggleTesterStatus(user.id, user.is_tester)}
+                                        className={`px-3 py-1 text-xs font-semibold rounded-full transition-colors ${user.is_tester
+                                            ? 'bg-purple-100 text-purple-800 hover:bg-purple-200'
+                                            : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                                            }`}
+                                    >
+                                        {user.is_tester ? '🧪 Tester' : 'Customer'}
+                                    </button>
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap">
                                     <div className="text-sm font-bold text-gray-900">

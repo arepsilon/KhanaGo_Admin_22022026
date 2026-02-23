@@ -21,7 +21,8 @@ import {
     List,
     Layers,
     Tag,
-    Receipt
+    Receipt,
+    Bell
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -29,9 +30,15 @@ export default function Sidebar() {
     const router = useRouter();
     const supabase = createClient();
     const [orphanedCount, setOrphanedCount] = useState(0);
+    const [userEmail, setUserEmail] = useState<string | null>(null);
 
     useEffect(() => {
         fetchOrphanedCount();
+        supabase.auth.getSession().then(({ data }) => {
+            const email = data.session?.user?.email || null;
+            console.log('Sidebar user email:', email);
+            setUserEmail(email);
+        });
 
         // Subscribe to real-time updates
         const channel = supabase
@@ -87,10 +94,12 @@ export default function Sidebar() {
         { name: 'Users', href: '/dashboard/users', icon: Users },
         { name: 'Riders', href: '/dashboard/riders', icon: Bike },
         { name: 'Analytics', href: '/dashboard/analytics', icon: BarChart3 },
-        { name: 'Payouts', href: '/dashboard/payouts', icon: Receipt },
+        { name: 'Restaurant Payouts', href: '/dashboard/payouts', icon: Receipt },
+        { name: 'Rider Payouts', href: '/dashboard/payouts/riders', icon: Bike },
         { name: 'Grocery', href: '/dashboard/grocery', icon: Carrot },
         { name: 'Promos', href: '/dashboard/ads', icon: Megaphone },
         { name: 'Coupons', href: '/dashboard/coupons', icon: Tag },
+        ...(userEmail === '9867109138@khanago.admin' ? [{ name: 'Notifications', href: '/dashboard/notifications', icon: Bell }] : []),
         { name: 'Settings', href: '/dashboard/settings', icon: Settings },
     ];
 
@@ -113,7 +122,7 @@ export default function Sidebar() {
                 </div>
             </div>
 
-            <nav className="flex-1 px-6 space-y-2">
+            <nav className="flex-1 px-6 space-y-2 overflow-y-auto py-4 custom-scrollbar">
                 {menuItems.map((item) => {
                     const isActive = pathname === item.href;
                     const Icon = item.icon;
@@ -130,8 +139,8 @@ export default function Sidebar() {
                             <span className="flex-1">{item.name}</span>
                             {item.badge && item.badge > 0 && (
                                 <span className={`px-2 py-0.5 text-xs font-bold rounded-full animate-pulse ${isActive
-                                        ? 'bg-white text-orange-600'
-                                        : 'bg-amber-500 text-white'
+                                    ? 'bg-white text-orange-600'
+                                    : 'bg-amber-500 text-white'
                                     }`}>
                                     {item.badge}
                                 </span>

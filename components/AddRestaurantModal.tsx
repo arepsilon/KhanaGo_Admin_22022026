@@ -28,6 +28,9 @@ export default function AddRestaurantModal({ isOpen, onClose, onSuccess }: AddRe
         platform_fee_per_order: '5',
         badge_text: '',
         show_menu_images: true,
+        opening_time: '09:00',
+        closing_time: '22:00',
+        preparation_time: '30',
     });
 
     const supabase = createClient();
@@ -74,6 +77,7 @@ export default function AddRestaurantModal({ isOpen, onClose, onSuccess }: AddRe
                     image_url,
                     badge_text: formData.badge_text || null,
                     show_menu_images: formData.show_menu_images,
+                    preparation_time: parseInt(formData.preparation_time),
                 }),
             });
 
@@ -145,6 +149,26 @@ export default function AddRestaurantModal({ isOpen, onClose, onSuccess }: AddRe
                                     placeholder="e.g. Popular, KhanaGo Choice"
                                     value={formData.badge_text}
                                     onChange={e => handleChange('badge_text', e.target.value)}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-black mb-1">Opening Time (IST)</label>
+                                <input
+                                    required
+                                    type="time"
+                                    className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all text-black bg-white"
+                                    value={formData.opening_time}
+                                    onChange={e => handleChange('opening_time', e.target.value)}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-black mb-1">Closing Time (IST)</label>
+                                <input
+                                    required
+                                    type="time"
+                                    className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all text-black bg-white"
+                                    value={formData.closing_time}
+                                    onChange={e => handleChange('closing_time', e.target.value)}
                                 />
                             </div>
                         </div>
@@ -268,6 +292,15 @@ export default function AddRestaurantModal({ isOpen, onClose, onSuccess }: AddRe
                                     className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all text-sm text-black"
                                     value={formData.estimated_delivery_time}
                                     onChange={e => handleChange('estimated_delivery_time', e.target.value)}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-black mb-1">Prep Time (mins)</label>
+                                <input
+                                    type="number"
+                                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all text-sm text-black"
+                                    value={formData.preparation_time}
+                                    onChange={e => handleChange('preparation_time', e.target.value)}
                                 />
                             </div>
                         </div>

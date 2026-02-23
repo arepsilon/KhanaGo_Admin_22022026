@@ -17,6 +17,15 @@ export default function RidersManagement() {
     const [newPassword, setNewPassword] = useState('');
     const [resetLoading, setResetLoading] = useState(false);
 
+    // Bank Details Edit State
+    const [editingBankRider, setEditingBankRider] = useState<any | null>(null);
+    const [bankDetails, setBankDetails] = useState({
+        bank_account_number: '',
+        bank_ifsc_code: '',
+        bank_account_name: ''
+    });
+    const [bankLoading, setBankLoading] = useState(false);
+
     useEffect(() => {
         fetchRiders();
     }, []);
@@ -129,6 +138,42 @@ export default function RidersManagement() {
         }
     };
 
+    const handleEditBankDetails = (rider: any) => {
+        setEditingBankRider(rider);
+        setBankDetails({
+            bank_account_number: rider.bank_account_number || '',
+            bank_ifsc_code: rider.bank_ifsc_code || '',
+            bank_account_name: rider.bank_account_name || ''
+        });
+    };
+
+    const handleSaveBankDetails = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!editingBankRider) return;
+
+        setBankLoading(true);
+        try {
+            const { error } = await supabase
+                .from('profiles')
+                .update({
+                    bank_account_number: bankDetails.bank_account_number,
+                    bank_ifsc_code: bankDetails.bank_ifsc_code,
+                    bank_account_name: bankDetails.bank_account_name
+                })
+                .eq('id', editingBankRider.id);
+
+            if (error) throw error;
+
+            alert('Bank details updated successfully');
+            setEditingBankRider(null);
+            fetchRiders();
+        } catch (error: any) {
+            alert('Error updating bank details: ' + error.message);
+        } finally {
+            setBankLoading(false);
+        }
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
@@ -178,6 +223,7 @@ export default function RidersManagement() {
                     <thead className="bg-gray-50">
                         <tr>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Bank Details</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Login ID</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Username (Email)</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Phone</th>
@@ -190,6 +236,16 @@ export default function RidersManagement() {
                             <tr key={rider.id} className="hover:bg-gray-50">
                                 <td className="px-6 py-4 whitespace-nowrap">
                                     <div className="font-medium text-gray-900">{rider.full_name}</div>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                    {rider.bank_account_number ? (
+                                        <div className="text-gray-600">
+                                            <div className="font-bold">{rider.bank_account_number}</div>
+                                            <div className="text-[10px]">{rider.bank_ifsc_code}</div>
+                                        </div>
+                                    ) : (
+                                        <span className="text-gray-400 italic">Not set</span>
+                                    )}
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap">
                                     <span className="font-mono text-sm bg-gray-100 px-2 py-1 rounded">
@@ -224,6 +280,12 @@ export default function RidersManagement() {
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                                     <div className="flex gap-2">
+                                        <button
+                                            onClick={() => handleEditBankDetails(rider)}
+                                            className="text-blue-600 hover:text-blue-900 bg-blue-50 px-3 py-1 rounded border border-blue-200 hover:bg-blue-100 transition-colors"
+                                        >
+                                            Bank Details
+                                        </button>
                                         <button
                                             onClick={() => setResetRiderId(rider.id)}
                                             className="text-orange-600 hover:text-orange-900 bg-orange-50 px-3 py-1 rounded border border-orange-200 hover:bg-orange-100 transition-colors"
@@ -413,6 +475,71 @@ export default function RidersManagement() {
                                 </div>
                             </form>
                         )}
+                    </div>
+                </div>
+            )}
+
+            {/* Edit Bank Details Modal */}
+            {editingBankRider && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-lg p-8 max-w-md w-full mx-4 shadow-xl">
+                        <div className="flex justify-between items-center mb-6">
+                            <h2 className="text-xl font-bold">Edit Bank Details</h2>
+                            <button onClick={() => setEditingBankRider(null)} className="text-gray-400 hover:text-gray-600">
+                                <X className="w-6 h-6" />
+                            </button>
+                        </div>
+                        <p className="text-sm text-gray-600 mb-6">Updating details for <span className="font-bold">{editingBankRider.full_name}</span></p>
+
+                        <form onSubmit={handleSaveBankDetails} className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium mb-1">Account Holder Name</label>
+                                <input
+                                    type="text"
+                                    value={bankDetails.bank_account_name}
+                                    onChange={(e) => setBankDetails({ ...bankDetails, bank_account_name: e.target.value })}
+                                    className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500"
+                                    placeholder="Enter bank account name"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium mb-1">Account Number</label>
+                                <input
+                                    type="text"
+                                    value={bankDetails.bank_account_number}
+                                    onChange={(e) => setBankDetails({ ...bankDetails, bank_account_number: e.target.value })}
+                                    className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500"
+                                    placeholder="Enter account number"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium mb-1">IFSC Code</label>
+                                <input
+                                    type="text"
+                                    value={bankDetails.bank_ifsc_code}
+                                    onChange={(e) => setBankDetails({ ...bankDetails, bank_ifsc_code: e.target.value })}
+                                    className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500"
+                                    placeholder="Enter IFSC code"
+                                />
+                            </div>
+
+                            <div className="flex gap-3 pt-4">
+                                <button
+                                    type="button"
+                                    onClick={() => setEditingBankRider(null)}
+                                    className="flex-1 px-4 py-2 border border-gray-300 rounded hover:bg-gray-50 font-medium"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={bankLoading}
+                                    className="flex-1 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded font-bold transition-colors disabled:opacity-50"
+                                >
+                                    {bankLoading ? 'Saving...' : 'Save Details'}
+                                </button>
+                            </div>
+                        </form>
                     </div>
                 </div>
             )}

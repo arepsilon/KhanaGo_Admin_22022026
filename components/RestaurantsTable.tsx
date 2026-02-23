@@ -28,6 +28,8 @@ interface Restaurant {
     bank_account_name: string | null;
     orders: { count: number }[];
     show_menu_images: boolean;
+    is_test: boolean;
+    preparation_time: number;
 }
 
 export default function RestaurantsTable() {
@@ -67,13 +69,52 @@ export default function RestaurantsTable() {
         };
     }, [filter]);
 
+    // Background checker for operating hours
+    useEffect(() => {
+        const interval = setInterval(() => {
+            checkOperatingHours(restaurants);
+        }, 60000); // Every minute
+
+        return () => clearInterval(interval);
+    }, [restaurants]);
+
+    const checkOperatingHours = async (currentRestaurants: any[]) => {
+        // Get IST time reliably
+        const now = new Date();
+        const istDateStr = now.toLocaleString('en-US', {
+            timeZone: 'Asia/Kolkata',
+            hour12: false,
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+
+        // Handle "24:xx" or other edge cases from toLocaleString
+        const [hours, minutes] = istDateStr.split(':');
+        const currentTime = `${hours.trim().padStart(2, '0')}:${minutes.trim().padStart(2, '0')}`;
+
+        for (const restaurant of currentRestaurants) {
+            if (!restaurant.opening_time || !restaurant.closing_time || !restaurant.is_active) continue;
+
+            const isOpen = currentTime >= restaurant.opening_time && currentTime <= restaurant.closing_time;
+
+            if (isOpen !== restaurant.is_open) {
+                console.log(`Auto-updating ${restaurant.name} status to ${isOpen ? 'OPEN' : 'CLOSED'} (IST: ${currentTime})`);
+                await supabase
+                    .from('restaurants')
+                    .update({ is_open: isOpen })
+                    .eq('id', restaurant.id);
+            }
+        }
+    };
+
     const fetchRestaurants = async () => {
         let query = supabase
             .from('restaurants')
             .select(`
                 *,
-                orders(count)
+                orders:orders(count)
             `)
+            .not('orders.status', 'eq', 'cancelled')
             .order('sort_order', { ascending: true });
 
         if (filter === 'active') {
@@ -137,6 +178,21 @@ export default function RestaurantsTable() {
         } catch (error: any) {
             console.error('Error updating status:', error.message);
             alert('Failed to update status');
+        }
+    };
+
+    const handleToggleTestMode = async (id: string, currentStatus: boolean) => {
+        try {
+            const { error } = await supabase
+                .from('restaurants')
+                .update({ is_test: !currentStatus })
+                .eq('id', id);
+
+            if (error) throw error;
+            fetchRestaurants();
+        } catch (error: any) {
+            console.error('Error updating test mode:', error.message);
+            alert('Failed to update test mode');
         }
     };
 
@@ -347,18 +403,33 @@ export default function RestaurantsTable() {
                                                     <p className="text-sm text-gray-500">{restaurant.address.split(',')[0]} (ID: {restaurant.id.slice(0, 8)})</p>
                                                 </div>
                                             </div>
-                                            <button
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    toggleActiveStatus(restaurant.id, restaurant.is_active);
-                                                }}
-                                                className={`px-3 py-1 text-sm font-semibold rounded-full transition-colors hover:bg-opacity-80 ${restaurant.is_active
-                                                    ? 'bg-green-100 text-green-800 hover:bg-green-200'
-                                                    : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
-                                                    }`}
-                                            >
-                                                {restaurant.is_active ? '✓ Active' : '✗ Inactive'}
-                                            </button>
+                                            <div className="flex items-center gap-3">
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        toggleActiveStatus(restaurant.id, restaurant.is_active);
+                                                    }}
+                                                    className={`px-3 py-1 text-sm font-semibold rounded-full transition-colors hover:bg-opacity-80 ${restaurant.is_active
+                                                        ? 'bg-green-100 text-green-800 hover:bg-green-200'
+                                                        : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                                                        }`}
+                                                >
+                                                    {restaurant.is_active ? '✓ Active' : '✗ Inactive'}
+                                                </button>
+
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleToggleTestMode(restaurant.id, restaurant.is_test);
+                                                    }}
+                                                    className={`px-3 py-1 text-sm font-semibold rounded-full transition-colors hover:bg-opacity-80 ${restaurant.is_test
+                                                        ? 'bg-purple-100 text-purple-800 hover:bg-purple-200 border border-purple-300'
+                                                        : 'bg-gray-100 text-gray-400 hover:bg-gray-200 border border-gray-200'
+                                                        }`}
+                                                >
+                                                    {restaurant.is_test ? '🧪 Test Mode ON' : '🧪 Normal Mode'}
+                                                </button>
+                                            </div>
                                             <div className="flex items-center gap-4">
                                                 <span className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border ${restaurant.is_open
                                                     ? 'bg-green-50 text-green-700 border-green-200'
@@ -448,6 +519,29 @@ export default function RestaurantsTable() {
                                                         <span className="text-gray-400">📞</span>
                                                         <p>{restaurant.phone}</p>
                                                     </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-gray-400">⏰</span>
+                                                        <div className="flex items-center gap-2">
+                                                            <input
+                                                                type="time"
+                                                                defaultValue={restaurant.opening_time || '09:00'}
+                                                                onBlur={(e) => updateGenericField(restaurant.id, 'opening_time', e.target.value)}
+                                                                className="px-2 py-1 border border-gray-200 rounded text-xs focus:ring-1 focus:ring-orange-500 outline-none"
+                                                            />
+                                                            <span>to</span>
+                                                            <input
+                                                                type="time"
+                                                                defaultValue={restaurant.closing_time || '22:00'}
+                                                                onBlur={(e) => updateGenericField(restaurant.id, 'closing_time', e.target.value)}
+                                                                className="px-2 py-1 border border-gray-200 rounded text-xs focus:ring-1 focus:ring-orange-500 outline-none"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                    <div className="pt-1">
+                                                        <p className="text-[10px] text-gray-400 italic">
+                                                            * Restaurant status will auto-update based on these hours (IST).
+                                                        </p>
+                                                    </div>
                                                     <div className="flex items-start gap-2">
                                                         <span className="text-gray-400 mt-0.5">📍</span>
                                                         <p className="flex-1">{restaurant.address}</p>
@@ -460,6 +554,15 @@ export default function RestaurantsTable() {
                                                         <div>
                                                             <p className="text-xs text-gray-400">Min Order</p>
                                                             <p className="font-medium text-gray-900">₹{restaurant.minimum_order || 0}</p>
+                                                        </div>
+                                                        <div>
+                                                            <p className="text-xs text-gray-400">Prep Time (Min)</p>
+                                                            <input
+                                                                type="number"
+                                                                defaultValue={restaurant.preparation_time || 30}
+                                                                onBlur={(e) => updateGenericField(restaurant.id, 'preparation_time', parseInt(e.target.value))}
+                                                                className="w-16 px-1 py-0.5 border border-gray-200 rounded text-xs font-medium text-gray-900 focus:ring-1 focus:ring-orange-500 outline-none"
+                                                            />
                                                         </div>
                                                     </div>
                                                 </div>

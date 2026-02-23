@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { Calendar, Download, Share2, Building2, Loader2, Printer } from 'lucide-react';
+import { Calendar, Download, Share2, Building2, Loader2, Printer, Wallet } from 'lucide-react';
 import jsPDF from 'jspdf';
 
 
@@ -19,9 +19,9 @@ type OrderItem = {
     id: string;
     quantity: number;
     unit_price: number;
-    menu_item: { name: string }[];
+    menu_item: any;
+    name?: string;
 };
-
 type Order = {
     id: string;
     order_number: string;
@@ -50,6 +50,7 @@ export default function PaymentReports() {
     const [feeSettings, setFeeSettings] = useState<FeeSettings>({ platform_fee: 5, transaction_fee_percent: 2 });
     const [reportGenerated, setReportGenerated] = useState(false);
     const [isSharing, setIsSharing] = useState(false);
+    const [payingOut, setPayingOut] = useState(false);
 
     // Get restaurant details
     const restaurantDetails = restaurants.find(r => r.id === selectedRestaurant);
@@ -359,6 +360,32 @@ Please confirm receipt of this report.`;
         });
     };
 
+    const handlePayNow = async () => {
+        if (!restaurantDetails || orders.length === 0) return;
+        if (!confirm(`Mark ₹${totals.netPayable.toFixed(2)} as paid to ${restaurantDetails.name}?`)) return;
+
+        setPayingOut(true);
+        try {
+            const { error } = await supabase
+                .from('restaurant_payouts')
+                .insert({
+                    restaurant_id: selectedRestaurant,
+                    amount: totals.netPayable,
+                    order_count: orders.length,
+                    status: 'completed',
+                    payout_date: new Date().toISOString()
+                });
+
+            if (error) throw error;
+            alert(`Payout of ₹${totals.netPayable.toFixed(2)} recorded successfully for ${restaurantDetails.name}`);
+        } catch (error: any) {
+            console.error('Payout failed:', error);
+            alert('Failed to record payout: ' + error.message);
+        } finally {
+            setPayingOut(false);
+        }
+    };
+
     return (
         <div className="space-y-6">
             {/* Filters */}
@@ -487,14 +514,19 @@ Please confirm receipt of this report.`;
                                             <td className="p-3 text-slate-600">{formatDate(order.created_at)}</td>
                                             <td className="p-3 text-slate-600">
                                                 <ul className="text-xs space-y-0.5">
-                                                    {order.order_items?.map((item) => (
-                                                        <li key={item.id}>
-                                                            {item.quantity}x {item.menu_item?.[0]?.name}
-                                                        </li>
-                                                    ))}
+                                                    {order.order_items?.map((item) => {
+                                                        const itemName = Array.isArray(item.menu_item)
+                                                            ? item.menu_item?.[0]?.name
+                                                            : item.menu_item?.name;
+                                                        return (
+                                                            <li key={item.id}>
+                                                                {item.quantity}x {itemName || item.name || 'Unknown'}
+                                                            </li>
+                                                        );
+                                                    })}
                                                 </ul>
                                             </td>
-                                            <td className="p-3 text-right font-medium">₹{order.subtotal.toFixed(2)}</td>
+                                            <td className="p-3 text-right font-medium text-black">₹{order.subtotal.toFixed(2)}</td>
                                             <td className="p-3 text-right text-red-500">-₹{deductions.commission.toFixed(2)}</td>
                                             <td className="p-3 text-right text-red-500">-₹{(deductions.platformFee + deductions.transactionFee).toFixed(2)}</td>
                                             <td className="p-3 text-right font-semibold text-green-600">₹{deductions.netPayable.toFixed(2)}</td>
@@ -567,6 +599,14 @@ Please confirm receipt of this report.`;
                         >
                             {isSharing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
                             {isSharing ? 'Generating PDF...' : 'Share PDF on WhatsApp'}
+                        </button>
+                        <button
+                            onClick={handlePayNow}
+                            disabled={payingOut || orders.length === 0}
+                            className="flex-1 bg-orange-500 text-white py-3 px-4 rounded-lg font-semibold hover:bg-orange-600 disabled:opacity-70 flex items-center justify-center gap-2"
+                        >
+                            {payingOut ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wallet className="w-4 h-4" />}
+                            {payingOut ? 'Processing...' : `Pay Now ₹${totals.netPayable.toFixed(2)}`}
                         </button>
                     </div>
                 </div>

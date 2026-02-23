@@ -1,6 +1,6 @@
 # 💼 Admin Dashboard
 
-Web application for platform administrators to manage the khana go delivery ecosystem.
+Web application for platform administrators to manage the food delivery ecosystem.
 
 ## Setup
 

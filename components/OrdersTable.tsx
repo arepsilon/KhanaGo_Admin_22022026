@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { Edit } from 'lucide-react';
+import EditOrderModal from './EditOrderModal';
 
 export default function OrdersTable() {
     const [orders, setOrders] = useState<any[]>([]);
@@ -12,6 +14,7 @@ export default function OrdersTable() {
     const [isAssigning, setIsAssigning] = useState(false);
     const [showAssignModal, setShowAssignModal] = useState<string | null>(null);
     const [retryingOrder, setRetryingOrder] = useState<string | null>(null);
+    const [editingOrder, setEditingOrder] = useState<any>(null);
     const supabase = createClient();
 
     useEffect(() => {
@@ -201,6 +204,23 @@ export default function OrdersTable() {
         return colors[status] || 'bg-gray-100 text-gray-800 border-gray-200';
     };
 
+    const formatDuration = (start: string, end: string) => {
+        const startTime = new Date(start).getTime();
+        const endTime = new Date(end).getTime();
+        const diffInMs = endTime - startTime;
+
+        if (diffInMs <= 0) return '0m';
+
+        const diffInMinutes = Math.floor(diffInMs / (1000 * 60));
+        const hours = Math.floor(diffInMinutes / 60);
+        const minutes = diffInMinutes % 60;
+
+        if (hours > 0) {
+            return `${hours}h ${minutes}m`;
+        }
+        return `${minutes}m`;
+    };
+
     if (loading) {
         return (
             <div className="space-y-4">
@@ -263,6 +283,16 @@ export default function OrdersTable() {
                                             <span className={`px-3 py-1 text-sm font-semibold rounded-full ${getStatusColor(order.status)}`}>
                                                 {order.status.replace('_', ' ').toUpperCase()}
                                             </span>
+                                            {order.delivered_at && (
+                                                <span className="px-3 py-1 text-sm font-semibold rounded-full bg-emerald-100 text-black border border-emerald-200">
+                                                    ⏱️ Delivery: {formatDuration(order.created_at, order.delivered_at)}
+                                                </span>
+                                            )}
+                                            {order.accepted_at && order.prepared_at && (
+                                                <span className="px-3 py-1 text-sm font-semibold rounded-full bg-indigo-100 text-black border border-indigo-200">
+                                                    🍳 Prep: {formatDuration(order.accepted_at, order.prepared_at)}
+                                                </span>
+                                            )}
                                             {order.rider_assignment_exhausted_at && ['accepted', 'preparing', 'ready'].includes(order.status) && (
                                                 <span className="px-3 py-1 text-sm font-semibold rounded-full bg-amber-100 text-amber-800 border border-amber-300 animate-pulse">
                                                     ⚠️ AWAITING RIDER
@@ -280,13 +310,13 @@ export default function OrdersTable() {
                                                         const orderCount = order.customer?.orders?.[0]?.count || 0;
                                                         if (orderCount === 1) {
                                                             return (
-                                                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                                                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-black">
                                                                     🌟 New Customer
                                                                 </span>
                                                             );
                                                         }
                                                         return (
-                                                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700">
+                                                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-50 text-black">
                                                                 Existing Customer ({orderCount} orders)
                                                             </span>
                                                         );
@@ -378,6 +408,21 @@ export default function OrdersTable() {
                                                 <p className="text-sm text-gray-600">
                                                     Placed: {new Date(order.created_at).toLocaleString()}
                                                 </p>
+                                                {order.delivered_at && (
+                                                    <>
+                                                        <p className="text-sm text-gray-600">
+                                                            Delivered: {new Date(order.delivered_at).toLocaleString()}
+                                                        </p>
+                                                        <p className="text-sm font-semibold text-black mt-1">
+                                                            ⏱️ Delivery Time: {formatDuration(order.created_at, order.delivered_at)}
+                                                        </p>
+                                                    </>
+                                                )}
+                                                {order.accepted_at && order.prepared_at && (
+                                                    <p className="text-sm font-semibold text-black mt-1">
+                                                        🍳 Prep Time: {formatDuration(order.accepted_at, order.prepared_at)}
+                                                    </p>
+                                                )}
                                                 <p className="text-sm text-gray-600">
                                                     Payment: {order.payment_method.toUpperCase()} - {order.payment_status.toUpperCase()}
                                                 </p>
@@ -387,7 +432,18 @@ export default function OrdersTable() {
 
                                     {/* Order Items */}
                                     <div className="mb-6">
-                                        <h4 className="font-semibold text-gray-900 mb-3">🍽️ Order Items ({order.order_items?.length || 0})</h4>
+                                        <div className="flex justify-between items-center mb-3">
+                                            <h4 className="font-semibold text-gray-900">🍽️ Order Items ({order.order_items?.length || 0})</h4>
+                                            {order.status !== 'delivered' && order.status !== 'cancelled' && (
+                                                <button
+                                                    onClick={() => setEditingOrder(order)}
+                                                    className="flex items-center gap-2 px-3 py-1.5 bg-orange-50 text-orange-600 hover:bg-orange-100 border border-orange-200 rounded-lg text-xs font-bold transition-all shadow-sm"
+                                                >
+                                                    <Edit className="w-3.5 h-3.5" />
+                                                    EDIT ITEMS
+                                                </button>
+                                            )}
+                                        </div>
                                         <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-200">
                                             {order.order_items?.map((item: any, index: number) => (
                                                 <div key={index} className="p-4 flex justify-between items-center">
@@ -577,6 +633,15 @@ export default function OrdersTable() {
                             </div>
                         </div>
                     </div>
+                )}
+
+                {editingOrder && (
+                    <EditOrderModal
+                        isOpen={!!editingOrder}
+                        onClose={() => setEditingOrder(null)}
+                        onSuccess={fetchOrders}
+                        order={editingOrder}
+                    />
                 )}
 
                 {orders.length === 0 && (
