@@ -72,7 +72,7 @@ export default function AddCategoryModal({ isOpen, onClose, onSuccess, category 
 
             const categoryData = {
                 name,
-                sort_order: parseInt(sortOrder.toString()),
+                sort_order: parseInt(sortOrder.toString()) || 0,
                 image_url: imageUrl,
             };
 
@@ -165,7 +165,10 @@ export default function AddCategoryModal({ isOpen, onClose, onSuccess, category 
                             <input
                                 type="number"
                                 value={sortOrder}
-                                onChange={(e) => setSortOrder(parseInt(e.target.value))}
+                                onChange={(e) => {
+                                    const val = parseInt(e.target.value);
+                                    setSortOrder(isNaN(val) ? '' : val);
+                                }}
                                 className="w-full px-4 py-2.5 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all text-sm text-slate-900 placeholder:text-gray-400"
                                 required
                             />
