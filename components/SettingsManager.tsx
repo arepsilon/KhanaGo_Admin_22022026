@@ -16,7 +16,13 @@ export default function SettingsManager() {
     const [baseDeliveryFee, setBaseDeliveryFee] = useState('30');
     const [perKmFee, setPerKmFee] = useState('10');
     const [platformFee, setPlatformFee] = useState('5');
+    const [whatsappNumber, setWhatsappNumber] = useState('918149875162');
     const [showMenuImages, setShowMenuImages] = useState(true);
+
+    // Grocery Specific State
+    const [groceryDeliveryCharge, setGroceryDeliveryCharge] = useState('15');
+    const [groceryMinimumOrder, setGroceryMinimumOrder] = useState('50');
+    const [groceryFreeDeliveryAbove, setGroceryFreeDeliveryAbove] = useState('150');
 
     // Razorpay State
     const [razorpayEnabled, setRazorpayEnabled] = useState(false);
@@ -49,6 +55,11 @@ export default function SettingsManager() {
                 const rpKeyId = data.find(s => s.key === 'razorpay_key_id')?.value;
                 const rpSecret = data.find(s => s.key === 'razorpay_key_secret')?.value;
                 const menuImages = data.find(s => s.key === 'show_menu_images')?.value;
+                const waNumber = data.find(s => s.key === 'whatsapp_support_url')?.value;
+
+                const grocCharge = data.find(s => s.key === 'grocery_delivery_charge')?.value;
+                const grocMin = data.find(s => s.key === 'grocery_minimum_order')?.value;
+                const grocFree = data.find(s => s.key === 'grocery_free_delivery_above')?.value;
 
                 if (version !== undefined) setMinVersion(String(version).replace(/"/g, ''));
                 if (radius !== undefined) setDeliveryRadius(String(radius));
@@ -57,6 +68,11 @@ export default function SettingsManager() {
                 if (kmFee !== undefined) setPerKmFee(String(kmFee));
                 if (platFee !== undefined) setPlatformFee(String(platFee));
                 if (menuImages !== undefined) setShowMenuImages(Boolean(menuImages));
+                if (waNumber !== undefined) setWhatsappNumber(String(waNumber).replace(/"/g, ''));
+
+                if (grocCharge !== undefined) setGroceryDeliveryCharge(String(grocCharge));
+                if (grocMin !== undefined) setGroceryMinimumOrder(String(grocMin));
+                if (grocFree !== undefined) setGroceryFreeDeliveryAbove(String(grocFree));
 
                 if (rpEnabled !== undefined) setRazorpayEnabled(Boolean(rpEnabled));
                 if (rpKeyId !== undefined) setRazorpayKeyId(String(rpKeyId).replace(/"/g, ''));
@@ -82,6 +98,12 @@ export default function SettingsManager() {
                 { key: 'base_delivery_fee', value: parseFloat(baseDeliveryFee), description: 'Base delivery fee (up to 2km)' },
                 { key: 'per_km_fee', value: parseFloat(perKmFee), description: 'Fee per km after base distance' },
                 { key: 'platform_fee', value: parseFloat(platformFee), description: 'Platform fee per order' },
+                { key: 'whatsapp_support_url', value: JSON.stringify(whatsappNumber), description: 'WhatsApp support number for customers' },
+
+                // Grocery specific
+                { key: 'grocery_delivery_charge', value: parseFloat(groceryDeliveryCharge) || 0, description: 'Delivery fee for grocery orders' },
+                { key: 'grocery_minimum_order', value: parseFloat(groceryMinimumOrder) || 0, description: 'Minimum order amount for grocery' },
+                { key: 'grocery_free_delivery_above', value: parseFloat(groceryFreeDeliveryAbove) || 0, description: 'Free delivery threshold for grocery' },
 
                 // Razorpay updates
                 { key: 'razorpay_enabled', value: razorpayEnabled, description: 'Enable Razorpay payment gateway' },
@@ -196,21 +218,80 @@ export default function SettingsManager() {
                     </div>
                 </div>
 
+                {/* WhatsApp Support Section */}
+                <div className="space-y-2">
+                    <label className="block text-sm font-semibold text-slate-900">WhatsApp Support Number</label>
+                    <input
+                        type="text"
+                        value={whatsappNumber}
+                        onChange={(e) => setWhatsappNumber(e.target.value)}
+                        className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all font-medium"
+                        placeholder="e.g. 918149875162"
+                    />
+                    <p className="text-xs text-slate-400">Include country code (e.g., 91 for India). This updates the "Help & Support" links in the customer app.</p>
+                </div>
+
                 {/* Enable Grocery */}
-                <div className="flex items-center justify-between p-4 rounded-xl border border-slate-100 bg-slate-50">
-                    <div>
-                        <h3 className="font-semibold text-slate-900">Enable Grocery</h3>
-                        <p className="text-sm text-slate-500">Show grocery tab in customer app</p>
+                <div className="flex flex-col p-6 rounded-xl border border-slate-100 bg-slate-50 gap-4">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h3 className="font-semibold text-slate-900">Enable Grocery</h3>
+                            <p className="text-sm text-slate-500">Show grocery tab in customer app</p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={enableGrocery}
+                                onChange={(e) => setEnableGrocery(e.target.checked)}
+                                className="sr-only peer"
+                            />
+                            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500"></div>
+                        </label>
                     </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                            type="checkbox"
-                            checked={enableGrocery}
-                            onChange={(e) => setEnableGrocery(e.target.checked)}
-                            className="sr-only peer"
-                        />
-                        <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500"></div>
-                    </label>
+
+                    {enableGrocery && (
+                        <div className="pt-4 border-t border-slate-200 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                            <div className="space-y-2">
+                                <label className="block text-sm font-semibold text-slate-900">Delivery Charge</label>
+                                <div className="relative">
+                                    <input
+                                        type="number"
+                                        value={groceryDeliveryCharge}
+                                        onChange={(e) => setGroceryDeliveryCharge(e.target.value)}
+                                        className="w-full px-4 py-2 rounded-xl border border-slate-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all font-medium bg-white"
+                                        placeholder="15"
+                                    />
+                                    <div className="absolute right-4 top-2 text-slate-500 font-medium">₹</div>
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <label className="block text-sm font-semibold text-slate-900">Min. Order</label>
+                                <div className="relative">
+                                    <input
+                                        type="number"
+                                        value={groceryMinimumOrder}
+                                        onChange={(e) => setGroceryMinimumOrder(e.target.value)}
+                                        className="w-full px-4 py-2 rounded-xl border border-slate-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all font-medium bg-white"
+                                        placeholder="50"
+                                    />
+                                    <div className="absolute right-4 top-2 text-slate-500 font-medium">₹</div>
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <label className="block text-sm font-semibold text-slate-900">Free Delivery Above</label>
+                                <div className="relative">
+                                    <input
+                                        type="number"
+                                        value={groceryFreeDeliveryAbove}
+                                        onChange={(e) => setGroceryFreeDeliveryAbove(e.target.value)}
+                                        className="w-full px-4 py-2 rounded-xl border border-slate-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all font-medium bg-white"
+                                        placeholder="150"
+                                    />
+                                    <div className="absolute right-4 top-2 text-slate-500 font-medium">₹</div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {/* Show Menu Images */}

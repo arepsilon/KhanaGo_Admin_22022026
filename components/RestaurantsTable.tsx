@@ -79,23 +79,31 @@ export default function RestaurantsTable() {
     }, [restaurants]);
 
     const checkOperatingHours = async (currentRestaurants: any[]) => {
-        // Get IST time reliably
+        // Get IST time reliably using strict UTC math
         const now = new Date();
-        const istDateStr = now.toLocaleString('en-US', {
-            timeZone: 'Asia/Kolkata',
-            hour12: false,
-            hour: '2-digit',
-            minute: '2-digit'
-        });
+        const istOffsetMs = (5 * 60 + 30) * 60000;
+        const istDate = new Date(now.getTime() + istOffsetMs);
 
-        // Handle "24:xx" or other edge cases from toLocaleString
-        const [hours, minutes] = istDateStr.split(':');
-        const currentTime = `${hours.trim().padStart(2, '0')}:${minutes.trim().padStart(2, '0')}`;
+        const currentHours = istDate.getUTCHours();
+        const currentMins = istDate.getUTCMinutes();
+
+        const formatZeroPad = (num: number) => num.toString().padStart(2, '0');
+        const currentTime = `${formatZeroPad(currentHours)}:${formatZeroPad(currentMins)}`;
 
         for (const restaurant of currentRestaurants) {
-            if (!restaurant.opening_time || !restaurant.closing_time || !restaurant.is_active) continue;
+            if (!restaurant.admin_opening_time || !restaurant.admin_closing_time || !restaurant.is_active) continue;
 
-            const isOpen = currentTime >= restaurant.opening_time && currentTime <= restaurant.closing_time;
+            const openTime = restaurant.admin_opening_time.substring(0, 5);
+            const closeTime = restaurant.admin_closing_time.substring(0, 5);
+
+            let isOpen = false;
+            // Handle midnight crossover (e.g. opens at 18:00, closes at 02:00)
+            if (closeTime < openTime) {
+                isOpen = currentTime >= openTime || currentTime < closeTime;
+            } else {
+                // Normal daytime hours (e.g. 10:00 to 22:00)
+                isOpen = currentTime >= openTime && currentTime < closeTime;
+            }
 
             if (isOpen !== restaurant.is_open) {
                 console.log(`Auto-updating ${restaurant.name} status to ${isOpen ? 'OPEN' : 'CLOSED'} (IST: ${currentTime})`);
@@ -524,15 +532,15 @@ export default function RestaurantsTable() {
                                                         <div className="flex items-center gap-2">
                                                             <input
                                                                 type="time"
-                                                                defaultValue={restaurant.opening_time || '09:00'}
-                                                                onBlur={(e) => updateGenericField(restaurant.id, 'opening_time', e.target.value)}
+                                                                defaultValue={restaurant.admin_opening_time || '09:00'}
+                                                                onBlur={(e) => updateGenericField(restaurant.id, 'admin_opening_time', e.target.value)}
                                                                 className="px-2 py-1 border border-gray-200 rounded text-xs focus:ring-1 focus:ring-orange-500 outline-none"
                                                             />
                                                             <span>to</span>
                                                             <input
                                                                 type="time"
-                                                                defaultValue={restaurant.closing_time || '22:00'}
-                                                                onBlur={(e) => updateGenericField(restaurant.id, 'closing_time', e.target.value)}
+                                                                defaultValue={restaurant.admin_closing_time || '22:00'}
+                                                                onBlur={(e) => updateGenericField(restaurant.id, 'admin_closing_time', e.target.value)}
                                                                 className="px-2 py-1 border border-gray-200 rounded text-xs focus:ring-1 focus:ring-orange-500 outline-none"
                                                             />
                                                         </div>

@@ -356,12 +356,19 @@ export default function OrdersTable() {
                                             <div className="text-xs text-gray-900 font-medium">{timeStr}</div>
                                             <div className="text-[10px] text-gray-500">{dateStr}</div>
                                             {(order.status === 'cancelled' || order.status === 'rejected') && cancelledByLabel && (
-                                                <span className={`inline-block mt-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold ${order.cancelled_by === 'customer' ? 'bg-blue-50 text-blue-700'
-                                                    : order.cancelled_by === 'restaurant' ? 'bg-purple-50 text-purple-700'
-                                                        : 'bg-gray-100 text-gray-700'
-                                                    }`}>
-                                                    ✕ {cancelledByLabel}
-                                                </span>
+                                                <div className="flex flex-col items-end mt-1">
+                                                    <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold ${order.cancelled_by === 'customer' ? 'bg-blue-50 text-blue-700'
+                                                        : order.cancelled_by === 'restaurant' ? 'bg-purple-50 text-purple-700'
+                                                            : 'bg-gray-100 text-gray-700'
+                                                        }`}>
+                                                        ✕ {cancelledByLabel}
+                                                    </span>
+                                                    {order.cancellation_reason && (
+                                                        <span className="text-[9px] text-gray-400 mt-0.5 max-w-[100px] truncate text-right italic" title={order.cancellation_reason}>
+                                                            {order.cancellation_reason}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             )}
                                         </td>
                                         <td className="py-2.5 px-1">
@@ -375,246 +382,255 @@ export default function OrdersTable() {
                                     </tr>
 
                                     {/* Expanded Details — Compact */}
-                                    {isExpanded && (
-                                        <tr>
-                                            <td colSpan={11} className="p-0 border-b-4 border-orange-200">
-                                                <div className="border-t border-orange-200 px-4 py-3 bg-orange-50/50">
-                                                    {/* Top: Badges */}
-                                                    <div className="flex flex-wrap gap-1.5 mb-3">
-                                                        {(() => {
-                                                            const orderCount = order.customer?.orders?.[0]?.count || 0;
-                                                            return orderCount === 1
-                                                                ? <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-green-100 text-black">🌟 New Customer</span>
-                                                                : <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-blue-50 text-black">👤 {orderCount} orders</span>;
-                                                        })()}
-                                                        {rider && (
-                                                            <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-cyan-50 text-cyan-700">
-                                                                🛵 {rider.full_name} • {rider.phone}
+                                    {
+                                        isExpanded && (
+                                            <tr>
+                                                <td colSpan={11} className="p-0 border-b-4 border-orange-200">
+                                                    <div className="border-t border-orange-200 px-4 py-3 bg-orange-50/50">
+                                                        {/* Top: Badges */}
+                                                        <div className="flex flex-wrap gap-1.5 mb-3">
+                                                            {(() => {
+                                                                const orderCount = order.customer?.orders?.[0]?.count || 0;
+                                                                return orderCount === 1
+                                                                    ? <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-green-100 text-black">🌟 New Customer</span>
+                                                                    : <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-blue-50 text-black">👤 {orderCount} orders</span>;
+                                                            })()}
+                                                            {rider && (
+                                                                <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-cyan-50 text-cyan-700">
+                                                                    🛵 {rider.full_name} • {rider.phone}
+                                                                </span>
+                                                            )}
+                                                            <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-gray-100 text-gray-700">
+                                                                💳 {order.payment_method.toUpperCase()} — {order.payment_status.toUpperCase()}
                                                             </span>
-                                                        )}
-                                                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-gray-100 text-gray-700">
-                                                            💳 {order.payment_method.toUpperCase()} — {order.payment_status.toUpperCase()}
-                                                        </span>
-                                                        {order.delivered_at && (
-                                                            <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-emerald-100 text-black">
-                                                                ⏱️ {formatDuration(order.created_at, order.delivered_at)}
-                                                            </span>
-                                                        )}
-                                                        {order.accepted_at && order.prepared_at && (
-                                                            <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-indigo-100 text-black">
-                                                                🍳 {formatDuration(order.accepted_at, order.prepared_at)}
-                                                            </span>
-                                                        )}
-                                                        {(order.status === 'cancelled' || order.status === 'rejected') && cancelledByLabel && (
-                                                            <span className={`px-2 py-0.5 text-[10px] font-semibold rounded-full border ${order.cancelled_by === 'customer' ? 'bg-blue-50 text-blue-700 border-blue-200'
-                                                                : order.cancelled_by === 'restaurant' ? 'bg-purple-50 text-purple-700 border-purple-200'
-                                                                    : 'bg-gray-100 text-gray-700 border-gray-200'
-                                                                }`}>
-                                                                {order.status === 'cancelled' ? 'Cancelled' : 'Rejected'} by {cancelledByLabel}
-                                                            </span>
-                                                        )}
-                                                    </div>
-
-                                                    {/* Main content: 3-column grid */}
-                                                    <div className="grid grid-cols-3 gap-3 mb-3">
-                                                        {/* Col 1: Address */}
-                                                        <div className="bg-white rounded-lg border border-gray-200 p-3">
-                                                            <h5 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">📍 Delivery Address</h5>
-                                                            <p className="text-xs font-medium text-gray-900">{order.address?.label}</p>
-                                                            <p className="text-xs text-gray-600">{order.address?.address_line1}</p>
-                                                            {order.address?.latitude && order.address?.longitude && (
-                                                                <p className="text-[10px] text-gray-400 mt-1 font-mono">{order.address.latitude}, {order.address.longitude}</p>
+                                                            {order.delivered_at && (
+                                                                <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-emerald-100 text-black">
+                                                                    ⏱️ {formatDuration(order.created_at, order.delivered_at)}
+                                                                </span>
+                                                            )}
+                                                            {order.accepted_at && order.prepared_at && (
+                                                                <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-indigo-100 text-black">
+                                                                    🍳 {formatDuration(order.accepted_at, order.prepared_at)}
+                                                                </span>
+                                                            )}
+                                                            {(order.status === 'cancelled' || order.status === 'rejected') && cancelledByLabel && (
+                                                                <span className={`px-2 py-0.5 text-[10px] font-semibold rounded-full border ${order.cancelled_by === 'customer' ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                                                    : order.cancelled_by === 'restaurant' ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                                                        : 'bg-gray-100 text-gray-700 border-gray-200'
+                                                                    }`}>
+                                                                    {order.status === 'cancelled' ? 'Cancelled' : 'Rejected'} by {cancelledByLabel}
+                                                                    {order.cancellation_reason && `: ${order.cancellation_reason}`}
+                                                                </span>
                                                             )}
                                                         </div>
 
-                                                        {/* Col 2: Order Items */}
-                                                        <div className="bg-white rounded-lg border border-gray-200 p-3">
-                                                            <div className="flex justify-between items-center mb-1">
-                                                                <h5 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">🍽️ Items ({order.order_items?.length || 0})</h5>
-                                                                {order.status !== 'delivered' && order.status !== 'cancelled' && (
-                                                                    <button
-                                                                        onClick={(e) => { e.stopPropagation(); setEditingOrder(order); }}
-                                                                        className="flex items-center gap-1 px-2 py-0.5 bg-orange-50 text-orange-600 hover:bg-orange-100 border border-orange-200 rounded text-[10px] font-bold"
-                                                                    >
-                                                                        <Edit className="w-2.5 h-2.5" />
-                                                                        EDIT
-                                                                    </button>
+                                                        {/* Main content: 3-column grid */}
+                                                        <div className="grid grid-cols-3 gap-3 mb-3">
+                                                            {/* Col 1: Address */}
+                                                            <div className="bg-white rounded-lg border border-gray-200 p-3">
+                                                                <h5 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">📍 Delivery Address</h5>
+                                                                <p className="text-xs font-medium text-gray-900">{order.address?.label}</p>
+                                                                <p className="text-xs text-gray-600">{order.address?.address_line1}</p>
+                                                                {order.address?.latitude && order.address?.longitude && (
+                                                                    <p className="text-[10px] text-gray-400 mt-1 font-mono">{order.address.latitude}, {order.address.longitude}</p>
                                                                 )}
                                                             </div>
-                                                            <div className="space-y-1 max-h-[120px] overflow-y-auto">
-                                                                {order.order_items?.map((item: any, index: number) => (
-                                                                    <div key={index} className="flex justify-between text-xs">
-                                                                        <span className="text-gray-900 truncate max-w-[180px]">{item.quantity}× {item.menu_item?.name}</span>
-                                                                        <span className="font-medium text-gray-700 ml-2 whitespace-nowrap">₹{item.subtotal.toFixed(0)}</span>
-                                                                    </div>
-                                                                ))}
-                                                            </div>
-                                                        </div>
 
-                                                        {/* Col 3: Bill */}
-                                                        <div className="bg-white rounded-lg border border-gray-200 p-3">
-                                                            <h5 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">💰 Bill</h5>
-                                                            <div className="space-y-0.5 text-xs">
-                                                                <div className="flex justify-between"><span className="text-gray-600">Subtotal</span><span className="text-black">₹{order.subtotal.toFixed(0)}</span></div>
-                                                                <div className="flex justify-between"><span className="text-gray-600">Delivery</span><span className="text-black">₹{order.delivery_fee.toFixed(0)}</span></div>
-                                                                <div className="flex justify-between"><span className="text-gray-600">Platform</span><span className="text-black">₹{(order.platform_fee || 0).toFixed(0)}</span></div>
-                                                                {(order.discount_amount > 0) && (
-                                                                    <div className="flex justify-between"><span className="text-green-600">Discount</span><span className="text-green-600">-₹{order.discount_amount.toFixed(0)}</span></div>
-                                                                )}
-                                                                <div className="flex justify-between pt-1 border-t border-gray-200 mt-1">
-                                                                    <span className="font-bold text-gray-900">Total</span>
-                                                                    <span className="font-bold text-orange-600">₹{order.total.toFixed(2)}</span>
+                                                            {/* Col 2: Order Items */}
+                                                            <div className="bg-white rounded-lg border border-gray-200 p-3">
+                                                                <div className="flex justify-between items-center mb-1">
+                                                                    <h5 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">🍽️ Items ({order.order_items?.length || 0})</h5>
+                                                                    {order.status !== 'delivered' && order.status !== 'cancelled' && (
+                                                                        <button
+                                                                            onClick={(e) => { e.stopPropagation(); setEditingOrder(order); }}
+                                                                            className="flex items-center gap-1 px-2 py-0.5 bg-orange-50 text-orange-600 hover:bg-orange-100 border border-orange-200 rounded text-[10px] font-bold"
+                                                                        >
+                                                                            <Edit className="w-2.5 h-2.5" />
+                                                                            EDIT
+                                                                        </button>
+                                                                    )}
+                                                                </div>
+                                                                <div className="space-y-1 max-h-[120px] overflow-y-auto">
+                                                                    {order.order_items?.map((item: any, index: number) => (
+                                                                        <div key={index} className="flex justify-between text-xs">
+                                                                            <span className="text-gray-900 truncate max-w-[180px]">{item.quantity}× {item.menu_item?.name}</span>
+                                                                            <span className="font-medium text-gray-700 ml-2 whitespace-nowrap">₹{item.subtotal.toFixed(0)}</span>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            </div>
+
+                                                            {/* Col 3: Bill */}
+                                                            <div className="bg-white rounded-lg border border-gray-200 p-3">
+                                                                <h5 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">💰 Bill</h5>
+                                                                <div className="space-y-0.5 text-xs">
+                                                                    <div className="flex justify-between"><span className="text-gray-600">Subtotal</span><span className="text-black">₹{order.subtotal.toFixed(0)}</span></div>
+                                                                    <div className="flex justify-between"><span className="text-gray-600">Delivery</span><span className="text-black">₹{order.delivery_fee.toFixed(0)}</span></div>
+                                                                    <div className="flex justify-between"><span className="text-gray-600">Platform</span><span className="text-black">₹{(order.platform_fee || 0).toFixed(0)}</span></div>
+                                                                    {(order.discount_amount > 0) && (
+                                                                        <div className="flex justify-between"><span className="text-green-600">Discount</span><span className="text-green-600">-₹{order.discount_amount.toFixed(0)}</span></div>
+                                                                    )}
+                                                                    <div className="flex justify-between pt-1 border-t border-gray-200 mt-1">
+                                                                        <span className="font-bold text-gray-900">Total</span>
+                                                                        <span className="font-bold text-orange-600">₹{order.total.toFixed(2)}</span>
+                                                                    </div>
                                                                 </div>
                                                             </div>
                                                         </div>
-                                                    </div>
 
-                                                    {/* Bottom: Timestamps + Actions */}
-                                                    <div className="flex items-center justify-between gap-3">
-                                                        <div className="flex items-center gap-3 text-[10px] text-gray-500">
-                                                            <span>Placed: {new Date(order.created_at).toLocaleString()}</span>
-                                                            {order.delivered_at && <span>• Delivered: {new Date(order.delivered_at).toLocaleString()}</span>}
-                                                        </div>
+                                                        {/* Bottom: Timestamps + Actions */}
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <div className="flex items-center gap-3 text-[10px] text-gray-500">
+                                                                <span>Placed: {new Date(order.created_at).toLocaleString()}</span>
+                                                                {order.delivered_at && <span>• Delivered: {new Date(order.delivered_at).toLocaleString()}</span>}
+                                                            </div>
 
-                                                        <div className="flex items-center gap-2">
-                                                            {/* Rider Assignment Alert */}
-                                                            {order.rider_assignment_exhausted_at && ['accepted', 'preparing', 'ready'].includes(order.status) && (
-                                                                <button
-                                                                    onClick={(e) => { e.stopPropagation(); handleRetryAssignment(order.id); }}
-                                                                    disabled={retryingOrder === order.id}
-                                                                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${retryingOrder === order.id
-                                                                        ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                                                                        : 'bg-amber-500 text-white hover:bg-amber-600'
-                                                                        }`}
+                                                            <div className="flex items-center gap-2">
+                                                                {/* Rider Assignment Alert */}
+                                                                {order.rider_assignment_exhausted_at && ['accepted', 'preparing', 'ready'].includes(order.status) && (
+                                                                    <button
+                                                                        onClick={(e) => { e.stopPropagation(); handleRetryAssignment(order.id); }}
+                                                                        disabled={retryingOrder === order.id}
+                                                                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${retryingOrder === order.id
+                                                                            ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                                                                            : 'bg-amber-500 text-white hover:bg-amber-600'
+                                                                            }`}
+                                                                    >
+                                                                        {retryingOrder === order.id ? '⏳ Retrying...' : `🔄 Retry Rider (${order.rider_assignment_attempts || 0})`}
+                                                                    </button>
+                                                                )}
+
+                                                                {/* Force Assign */}
+                                                                {['accepted', 'preparing', 'ready', 'assigned'].includes(order.status) && (
+                                                                    <button
+                                                                        onClick={(e) => { e.stopPropagation(); fetchOnlineRiders(); setShowAssignModal(order.id); }}
+                                                                        className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg text-xs font-bold transition-colors"
+                                                                    >
+                                                                        🛵 Force Assign
+                                                                    </button>
+                                                                )}
+
+                                                                {/* Status Dropdown */}
+                                                                <select
+                                                                    value={order.status}
+                                                                    onClick={(e) => e.stopPropagation()}
+                                                                    onChange={(e) => updateOrderStatus(order.id, e.target.value)}
+                                                                    className="px-2 py-1.5 border border-gray-300 rounded-lg text-xs text-black focus:outline-none focus:ring-2 focus:ring-orange-500"
                                                                 >
-                                                                    {retryingOrder === order.id ? '⏳ Retrying...' : `🔄 Retry Rider (${order.rider_assignment_attempts || 0})`}
-                                                                </button>
-                                                            )}
-
-                                                            {/* Force Assign */}
-                                                            {['accepted', 'preparing', 'ready', 'assigned'].includes(order.status) && (
-                                                                <button
-                                                                    onClick={(e) => { e.stopPropagation(); fetchOnlineRiders(); setShowAssignModal(order.id); }}
-                                                                    className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg text-xs font-bold transition-colors"
-                                                                >
-                                                                    🛵 Force Assign
-                                                                </button>
-                                                            )}
-
-                                                            {/* Status Dropdown */}
-                                                            <select
-                                                                value={order.status}
-                                                                onClick={(e) => e.stopPropagation()}
-                                                                onChange={(e) => updateOrderStatus(order.id, e.target.value)}
-                                                                className="px-2 py-1.5 border border-gray-300 rounded-lg text-xs text-black focus:outline-none focus:ring-2 focus:ring-orange-500"
-                                                            >
-                                                                <option value="pending">Pending</option>
-                                                                <option value="accepted">Accepted</option>
-                                                                <option value="preparing">Preparing</option>
-                                                                <option value="ready">Ready</option>
-                                                                <option value="assigned">Assigned to Rider</option>
-                                                                <option value="picked_up">Picked Up</option>
-                                                                <option value="on_the_way">On the Way</option>
-                                                                <option value="delivered">Delivered</option>
-                                                                <option value="cancelled">Cancelled</option>
-                                                                <option value="rejected">Rejected</option>
-                                                            </select>
+                                                                    <option value="pending">Pending</option>
+                                                                    <option value="accepted">Accepted</option>
+                                                                    <option value="preparing">Preparing</option>
+                                                                    <option value="ready">Ready</option>
+                                                                    <option value="assigned">Assigned to Rider</option>
+                                                                    <option value="picked_up">Picked Up</option>
+                                                                    <option value="on_the_way">On the Way</option>
+                                                                    <option value="delivered">Delivered</option>
+                                                                    <option value="cancelled">Cancelled</option>
+                                                                    <option value="rejected">Rejected</option>
+                                                                </select>
+                                                            </div>
                                                         </div>
                                                     </div>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    )}
+                                                </td>
+                                            </tr>
+                                        )
+                                    }
                                 </React.Fragment>
                             );
                         })}
                     </tbody>
-                </table>
+                </table >
 
 
                 {/* Force Assign Modal */}
-                {showAssignModal && (
-                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                        <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] flex flex-col overflow-hidden">
-                            <div className="p-6 border-b border-gray-100 flex justify-between items-center">
-                                <div>
-                                    <h2 className="text-xl font-bold text-gray-900">Force Assign Rider</h2>
-                                    <p className="text-sm text-gray-500">Order: {orders.find(o => o.id === showAssignModal)?.order_number}</p>
+                {
+                    showAssignModal && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] flex flex-col overflow-hidden">
+                                <div className="p-6 border-b border-gray-100 flex justify-between items-center">
+                                    <div>
+                                        <h2 className="text-xl font-bold text-gray-900">Force Assign Rider</h2>
+                                        <p className="text-sm text-gray-500">Order: {orders.find(o => o.id === showAssignModal)?.order_number}</p>
+                                    </div>
+                                    <button onClick={() => setShowAssignModal(null)} className="text-gray-400 hover:text-gray-600">
+                                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                        </svg>
+                                    </button>
                                 </div>
-                                <button onClick={() => setShowAssignModal(null)} className="text-gray-400 hover:text-gray-600">
-                                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                    </svg>
-                                </button>
-                            </div>
 
-                            <div className="p-6 overflow-y-auto flex-1">
-                                <h3 className="text-sm font-bold text-gray-700 mb-4 uppercase tracking-wider">Online Riders ({onlineRiders.length})</h3>
-                                <div className="space-y-3">
-                                    {onlineRiders.map((item) => (
-                                        <div
-                                            key={item.rider_id}
-                                            className="p-4 border border-gray-200 rounded-xl hover:border-cyan-500 hover:bg-cyan-50 transition-all cursor-pointer group"
-                                            onClick={() => handleForceAssign(showAssignModal, item.rider_id)}
-                                        >
-                                            <div className="flex justify-between items-center">
-                                                <div>
-                                                    <p className="font-bold text-gray-900 group-hover:text-cyan-900">{item.rider.full_name}</p>
-                                                    <p className="text-xs text-gray-500">{item.rider.phone || 'No phone number'}</p>
-                                                </div>
-                                                <div className="text-right">
-                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${item.active_deliveries_count >= 3 ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'
-                                                        }`}>
-                                                        {item.active_deliveries_count} active orders
-                                                    </span>
+                                <div className="p-6 overflow-y-auto flex-1">
+                                    <h3 className="text-sm font-bold text-gray-700 mb-4 uppercase tracking-wider">Online Riders ({onlineRiders.length})</h3>
+                                    <div className="space-y-3">
+                                        {onlineRiders.map((item) => (
+                                            <div
+                                                key={item.rider_id}
+                                                className="p-4 border border-gray-200 rounded-xl hover:border-cyan-500 hover:bg-cyan-50 transition-all cursor-pointer group"
+                                                onClick={() => handleForceAssign(showAssignModal, item.rider_id)}
+                                            >
+                                                <div className="flex justify-between items-center">
+                                                    <div>
+                                                        <p className="font-bold text-gray-900 group-hover:text-cyan-900">{item.rider.full_name}</p>
+                                                        <p className="text-xs text-gray-500">{item.rider.phone || 'No phone number'}</p>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${item.active_deliveries_count >= 3 ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'
+                                                            }`}>
+                                                            {item.active_deliveries_count} active orders
+                                                        </span>
+                                                    </div>
                                                 </div>
                                             </div>
-                                        </div>
-                                    ))}
-                                    {onlineRiders.length === 0 && (
-                                        <div className="text-center py-8 bg-gray-50 rounded-xl">
-                                            <p className="text-gray-500">No riders are currently online.</p>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-
-                            {isAssigning && (
-                                <div className="absolute inset-0 bg-white bg-opacity-70 flex items-center justify-center">
-                                    <div className="flex flex-col items-center gap-3">
-                                        <div className="w-10 h-10 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin"></div>
-                                        <p className="font-bold text-cyan-600">Assigning Rider...</p>
+                                        ))}
+                                        {onlineRiders.length === 0 && (
+                                            <div className="text-center py-8 bg-gray-50 rounded-xl">
+                                                <p className="text-gray-500">No riders are currently online.</p>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
-                            )}
 
-                            <div className="p-6 bg-gray-50 border-t border-gray-100">
-                                <button
-                                    onClick={() => setShowAssignModal(null)}
-                                    className="w-full py-3 text-gray-600 font-bold hover:text-gray-900 transition-colors"
-                                >
-                                    Cancel
-                                </button>
+                                {isAssigning && (
+                                    <div className="absolute inset-0 bg-white bg-opacity-70 flex items-center justify-center">
+                                        <div className="flex flex-col items-center gap-3">
+                                            <div className="w-10 h-10 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin"></div>
+                                            <p className="font-bold text-cyan-600">Assigning Rider...</p>
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="p-6 bg-gray-50 border-t border-gray-100">
+                                    <button
+                                        onClick={() => setShowAssignModal(null)}
+                                        className="w-full py-3 text-gray-600 font-bold hover:text-gray-900 transition-colors"
+                                    >
+                                        Cancel
+                                    </button>
+                                </div>
                             </div>
                         </div>
-                    </div>
-                )}
+                    )
+                }
 
-                {editingOrder && (
-                    <EditOrderModal
-                        isOpen={!!editingOrder}
-                        onClose={() => setEditingOrder(null)}
-                        onSuccess={fetchOrders}
-                        order={editingOrder}
-                    />
-                )}
+                {
+                    editingOrder && (
+                        <EditOrderModal
+                            isOpen={!!editingOrder}
+                            onClose={() => setEditingOrder(null)}
+                            onSuccess={fetchOrders}
+                            order={editingOrder}
+                        />
+                    )
+                }
 
-                {orders.length === 0 && (
-                    <div className="bg-white rounded-xl shadow-sm p-12 text-center">
-                        <p className="text-gray-500 text-lg">No orders found</p>
-                    </div>
-                )}
-            </div>
-        </div>
+                {
+                    orders.length === 0 && (
+                        <div className="bg-white rounded-xl shadow-sm p-12 text-center">
+                            <p className="text-gray-500 text-lg">No orders found</p>
+                        </div>
+                    )
+                }
+            </div >
+        </div >
     );
 }

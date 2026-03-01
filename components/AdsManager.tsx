@@ -16,8 +16,10 @@ export default function AdsManager() {
 
     // Form State
     const [adTitle, setAdTitle] = useState('');
+    const [adCategory, setAdCategory] = useState<'restaurant' | 'grocery'>('restaurant');
     const [imageFile, setImageFile] = useState<File | null>(null);
-    const [selectedRestaurant, setSelectedRestaurant] = useState(''); // New state
+    const [selectedRestaurant, setSelectedRestaurant] = useState('');
+    const [linkTarget, setLinkTarget] = useState(''); // New state
 
     // Integrated Coupon State
     const [includeCoupon, setIncludeCoupon] = useState(false);
@@ -51,9 +53,11 @@ export default function AdsManager() {
 
     const handleEditAd = (ad: any) => {
         setAdTitle(ad.title);
+        setAdCategory(ad.category || 'restaurant');
         setEditingId(ad.id);
         setImageFile(null);
-        setSelectedRestaurant(ad.restaurant_id || ''); // Set restaurant
+        setSelectedRestaurant(ad.restaurant_id || '');
+        setLinkTarget(ad.link_target || '');
 
         // Pre-fill coupon data if exists
         if (ad.coupons) {
@@ -81,7 +85,9 @@ export default function AdsManager() {
 
     const resetForms = () => {
         setAdTitle('');
-        setSelectedRestaurant(''); // Clear restaurant
+        setAdCategory('restaurant');
+        setSelectedRestaurant('');
+        setLinkTarget('');
         setImageFile(null);
         setEditingId(null);
         setIsModalOpen(false);
@@ -145,8 +151,10 @@ export default function AdsManager() {
             // 3. Handle Ad (Insert/Update)
             const adPayload = {
                 title: adTitle,
+                category: adCategory,
                 image_url: imageUrl,
-                restaurant_id: selectedRestaurant || null, // Add restaurant_id
+                restaurant_id: adCategory === 'restaurant' ? (selectedRestaurant || null) : null,
+                link_target: adCategory === 'grocery' ? (linkTarget || null) : null,
                 coupon_code: finalCouponCode
             };
 
@@ -169,8 +177,18 @@ export default function AdsManager() {
 
     const deleteAd = async (id: string) => {
         if (!confirm('Delete this promotion?')) return;
-        await supabase.from('ads').delete().eq('id', id);
-        fetchAds();
+        try {
+            const { error } = await supabase.from('ads').delete().eq('id', id);
+            if (error) {
+                console.error(error);
+                alert('Database Error:\n' + error.message);
+            } else {
+                fetchAds();
+            }
+        } catch (err: any) {
+            console.error(err);
+            alert('App Error:\n' + err.message);
+        }
     };
 
     if (loading) return <div className="p-8 text-center text-gray-500">Loading Promotions...</div>;
@@ -212,6 +230,9 @@ export default function AdsManager() {
                                     {ad.coupon_code}
                                 </div>
                             )}
+                            <div className="absolute top-3 left-3 bg-black/60 backdrop-blur-md text-white text-xs font-bold px-2 py-1 rounded-md shadow-sm uppercase tracking-wider">
+                                {ad.category || 'Restaurant'}
+                            </div>
                         </div>
                         <div className="p-4">
                             <h3 className="font-bold text-gray-800">{ad.title}</h3>
@@ -247,6 +268,18 @@ export default function AdsManager() {
                                         onChange={e => setAdTitle(e.target.value)}
                                         placeholder="e.g., Summer Sale"
                                     />
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Target Section</label>
+                                    <select
+                                        className="w-full p-2 border rounded-lg bg-white"
+                                        value={adCategory}
+                                        onChange={e => setAdCategory(e.target.value as 'restaurant' | 'grocery')}
+                                    >
+                                        <option value="restaurant">Restaurant App (Food Delivery)</option>
+                                        <option value="grocery">Grocery Section (KhanaGo Fresh)</option>
+                                    </select>
                                 </div>
 
                                 <div>

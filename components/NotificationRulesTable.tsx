@@ -250,68 +250,38 @@ export default function NotificationRulesTable() {
                 return;
             }
 
-            // 3. Fetch push tokens for target users (customer app only, latest per user)
-            const { data: tokens } = await supabase
-                .from('push_tokens')
-                .select('user_id, token')
-                .eq('app_type', 'customer')
-                .in('user_id', targetUserIds)
-                .order('updated_at', { ascending: false });
-
-            if (!tokens || tokens.length === 0) {
-                setSendResult({ ruleId: rule.id, count: 0, error: 'No push tokens found. Make sure the targeted users have the customer app installed with notifications enabled.' });
-                setSendingRuleId(null);
-                return;
-            }
-
-            // 4. Keep only the latest token per user (one notification per person)
-            const latestTokenPerUser = Array.from(
-                new Map(tokens.map(t => [t.user_id, t])).values()
-            );
-
-            // 5. Fetch user names for personalization
-            const userIdsForNames = latestTokenPerUser.map(t => t.user_id);
-            const { data: userProfiles } = await supabase
-                .from('profiles')
-                .select('id, full_name')
-                .in('id', userIdsForNames);
-            const nameMap = new Map((userProfiles || []).map(p => [p.id, p.full_name || 'there']));
-
-            // 6. Build notifications with {name} replaced
-            const notifications = latestTokenPerUser.map(t => {
-                const userName = nameMap.get(t.user_id) || 'there';
-                return {
-                    to: t.token,
-                    title: rule.title_template.replace(/{name}/gi, userName),
-                    body: rule.body_template.replace(/{name}/gi, userName),
-                    sound: 'default',
-                    data: { type: 'marketing', rule_id: rule.id },
-                };
-            });
-
-            // Send via server-side API route (avoids CORS)
+            // Send via server-side API route (which has Service Role to bypass RLS on push tokens)
             const response = await fetch('/api/send-notification', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ notifications }),
+                body: JSON.stringify({
+                    targetUserIds,
+                    titleTemplate: rule.title_template,
+                    bodyTemplate: rule.body_template,
+                    ruleId: rule.id
+                }),
             });
+
             const result = await response.json();
             if (!response.ok) throw new Error(result.error || 'Failed to send');
             console.log('Push result:', result);
-            const sentCount = result.count || notifications.length;
+
+            const sentCount = result.count || 0;
+            const sentUserIds = result.sentUserIds || [];
 
             // 5. Log sent notifications
-            const logEntries = [...new Set(tokens.map(t => t.user_id))].map(userId => ({
-                rule_id: rule.id,
-                user_id: userId,
-                title: rule.title_template,
-                body: rule.body_template,
-                status: 'sent',
-            }));
+            if (sentUserIds.length > 0) {
+                const logEntries = sentUserIds.map((userId: string) => ({
+                    rule_id: rule.id,
+                    user_id: userId,
+                    title: rule.title_template,
+                    body: rule.body_template,
+                    status: 'sent',
+                }));
+                await supabase.from('notification_log').insert(logEntries);
+            }
 
-            await supabase.from('notification_log').insert(logEntries);
-
-            setSendResult({ ruleId: rule.id, count: sentCount });
+            setSendResult({ ruleId: rule.id, count: sentCount, error: result.error });
             if (expandedRuleId === rule.id) {
                 fetchLogForRule(rule.id);
             }

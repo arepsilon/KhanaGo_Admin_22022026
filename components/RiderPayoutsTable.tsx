@@ -14,7 +14,8 @@ import {
     ChevronUp,
     Calendar,
     ArrowRight,
-    Loader2
+    Loader2,
+    Download
 } from 'lucide-react';
 
 interface Rider {
@@ -27,6 +28,7 @@ interface Rider {
     bank_account_name: string | null;
     total_earned: number;
     pending_balance: number;
+    cash_in_hand: number;
 }
 
 export default function RiderPayoutsTable() {
@@ -57,12 +59,26 @@ export default function RiderPayoutsTable() {
 
             if (profileError) throw profileError;
 
+            // 1.5 Fetch all cash collections across all riders globally to sum up later
+            const { data: cashCollectionsData, error: collectionsErr } = await supabase
+                .from('rider_cash_collections')
+                .select('rider_id, amount');
+
+            if (collectionsErr) console.warn('Could not fetch cash collections (table might not exist yet)', collectionsErr);
+            const cashCollections = cashCollectionsData || [];
+
             // 2. For each rider, fetch their delivery stats
             const riderStats = await Promise.all(profiles.map(async (rider) => {
                 // Total completed deliveries within date range
                 let allDeliveriesQuery = supabase
                     .from('deliveries')
-                    .select('delivery_fee')
+                    .select(`
+                        delivery_fee,
+                        orders (
+                            total,
+                            payment_method
+                        )
+                    `)
                     .eq('rider_id', rider.id)
                     .eq('status', 'completed')
                     .gte('updated_at', `${payoutDateRange.start}T00:00:00.000Z`)
@@ -73,7 +89,13 @@ export default function RiderPayoutsTable() {
                 // Deliveries not yet paid within date range
                 let pendingDeliveriesQuery = supabase
                     .from('deliveries')
-                    .select('delivery_fee')
+                    .select(`
+                        delivery_fee,
+                        orders (
+                            total,
+                            payment_method
+                        )
+                    `)
                     .eq('rider_id', rider.id)
                     .eq('status', 'completed')
                     .is('payout_id', null)
@@ -83,7 +105,32 @@ export default function RiderPayoutsTable() {
                 const { data: pendingDeliveries, error: pendingErr } = await pendingDeliveriesQuery;
 
                 const totalEarned = (allDeliveries || []).reduce((sum, d) => sum + Number(d.delivery_fee || 0), 0);
-                const pendingBalance = (pendingDeliveries || []).reduce((sum, d) => sum + Number(d.delivery_fee || 0), 0);
+                const pendingBalance = (pendingDeliveries || []).reduce((sum: number, d: any) => sum + Number(d.delivery_fee || 0), 0);
+
+                // Sum all COD orders for this rider EVER (Lifetime) 
+                const allTimeCODOrdersQuery = await supabase
+                    .from('deliveries')
+                    .select('orders(total, payment_method)')
+                    .eq('rider_id', rider.id)
+                    .eq('status', 'completed');
+
+                let allTimeCashSum = 0;
+                if (!allTimeCODOrdersQuery.error && allTimeCODOrdersQuery.data) {
+                    allTimeCashSum = allTimeCODOrdersQuery.data.reduce((sum, d: any) => {
+                        if (d.orders && d.orders.payment_method === 'cash') {
+                            return sum + Number(d.orders.total || 0);
+                        }
+                        return sum;
+                    }, 0);
+                }
+
+                // Sum all cash they've already handed over to admin
+                const totalHandedOver = cashCollections
+                    .filter((c: any) => c.rider_id === rider.id)
+                    .reduce((sum: number, c: any) => sum + Number(c.amount || 0), 0);
+
+                // The true pending cash they are holding
+                const pendingCashInHand = Math.max(0, allTimeCashSum - totalHandedOver);
 
                 return {
                     id: rider.id,
@@ -94,7 +141,8 @@ export default function RiderPayoutsTable() {
                     bank_ifsc_code: rider.bank_ifsc_code,
                     bank_account_name: rider.bank_account_name,
                     total_earned: totalEarned,
-                    pending_balance: pendingBalance
+                    pending_balance: pendingBalance,
+                    cash_in_hand: pendingCashInHand
                 };
             }));
 
@@ -103,6 +151,46 @@ export default function RiderPayoutsTable() {
             console.error('Error fetching rider data:', error);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleCollectCash = async (riderId: string, currentCashInHand: number) => {
+        if (currentCashInHand <= 0) {
+            alert('No cash in hand to collect from this rider.');
+            return;
+        }
+
+        const amountStr = window.prompt(`Enter amount to collect from rider (Max: ₹${currentCashInHand}):`);
+        if (!amountStr) return;
+
+        const amount = parseFloat(amountStr);
+        if (isNaN(amount) || amount <= 0) {
+            alert('Invalid amount entered.');
+            return;
+        }
+
+        if (amount > currentCashInHand) {
+            alert(`Amount exceeds the known cash in hand of ₹${currentCashInHand}.`);
+            return;
+        }
+
+        try {
+            const response = await fetch('/api/payouts/riders/collect-cash', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ riderId, amount })
+            });
+
+            if (!response.ok) {
+                const data = await response.json();
+                throw new Error(data.error || 'Failed to record cash collection');
+            }
+
+            alert(`Successfully collected ₹${amount} from rider!`);
+            fetchRiderData();
+        } catch (error: any) {
+            console.error('Collect cash error:', error);
+            alert('Error: ' + error.message);
         }
     };
 
@@ -148,6 +236,40 @@ export default function RiderPayoutsTable() {
             alert('Failed to process payout: ' + error.message);
         } finally {
             setProcessingPayout(null);
+        }
+    };
+
+    const handleExportExcel = async (riderId: string) => {
+        try {
+            const response = await fetch('/api/payouts/riders/export-breakdown', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    riderId,
+                    startDate: payoutDateRange.start,
+                    endDate: payoutDateRange.end
+                })
+            });
+
+            if (!response.ok) {
+                const data = await response.json();
+                throw new Error(data.error || 'Failed to export Excel');
+            }
+
+            // Trigger file download
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `payout-breakdown-${riderId}.xlsx`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+
+        } catch (error: any) {
+            console.error('Export Excel error:', error);
+            alert('Error exporting Excel: ' + error.message);
         }
     };
 
@@ -219,6 +341,7 @@ export default function RiderPayoutsTable() {
                             <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Rider</th>
                             <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Bank Details</th>
                             <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Total Earned</th>
+                            <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Cash in Hand</th>
                             <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Pending Balance</th>
                             <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Actions</th>
                         </tr>
@@ -253,32 +376,49 @@ export default function RiderPayoutsTable() {
                                         <div className="font-bold text-slate-900">₹{rider.total_earned.toLocaleString()}</div>
                                     </td>
                                     <td className="px-6 py-4">
+                                        <div className={`font-bold ${rider.cash_in_hand > 0 ? 'text-red-600' : 'text-slate-500'}`}>
+                                            ₹{rider.cash_in_hand.toLocaleString()}
+                                        </div>
+                                    </td>
+                                    <td className="px-6 py-4">
                                         <div className={`font-bold ${rider.pending_balance > 0 ? 'text-orange-600' : 'text-emerald-600'}`}>
                                             ₹{rider.pending_balance.toLocaleString()}
                                         </div>
                                     </td>
                                     <td className="px-6 py-4 text-right">
-                                        <div className="flex items-center justify-end gap-2">
+                                        <div className="flex items-center justify-end gap-2 flex-wrap">
+                                            <button
+                                                onClick={() => handleExportExcel(rider.id)}
+                                                className="px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-200"
+                                            >
+                                                <Download size={14} /> Export Excel
+                                            </button>
                                             <button
                                                 onClick={() => handleProcessPayout(rider.id, rider.pending_balance)}
                                                 disabled={rider.pending_balance <= 0 || processingPayout === rider.id}
-                                                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${rider.pending_balance > 0
-                                                    ? 'bg-orange-600 text-white hover:bg-orange-700 shadow-md shadow-orange-200'
+                                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${rider.pending_balance > 0
+                                                    ? 'bg-orange-600 text-white hover:bg-orange-700 shadow-sm shadow-orange-200'
                                                     : 'bg-slate-100 text-slate-400 cursor-not-allowed'
                                                     }`}
                                             >
-                                                {processingPayout === rider.id ? (
-                                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                                ) : (
-                                                    <Wallet size={16} />
-                                                )}
-                                                Pay Now
+                                                {processingPayout === rider.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wallet size={14} />}
+                                                Pay
+                                            </button>
+                                            <button
+                                                onClick={() => handleCollectCash(rider.id, rider.cash_in_hand)}
+                                                disabled={rider.cash_in_hand <= 0}
+                                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${rider.cash_in_hand > 0
+                                                    ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm shadow-emerald-200'
+                                                    : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                                    }`}
+                                            >
+                                                <CreditCard size={14} /> Collect
                                             </button>
                                             <button
                                                 onClick={() => setExpandedRiderId(expandedRiderId === rider.id ? null : rider.id)}
-                                                className="p-2 hover:bg-slate-200 rounded-lg transition-colors text-slate-500"
+                                                className="p-1.5 hover:bg-slate-200 rounded-lg transition-colors text-slate-500"
                                             >
-                                                {expandedRiderId === rider.id ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                                                {expandedRiderId === rider.id ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
                                             </button>
                                         </div>
                                     </td>

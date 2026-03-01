@@ -20,8 +20,8 @@ export async function POST(request: Request) {
             latitude,
             longitude,
             show_menu_images,
-            opening_time,
-            closing_time,
+            admin_opening_time,
+            admin_closing_time,
             preparation_time,
         } = body;
 
@@ -99,8 +99,8 @@ export async function POST(request: Request) {
                 latitude: latitude || null,
                 longitude: longitude || null,
                 show_menu_images: show_menu_images !== undefined ? show_menu_images : true,
-                opening_time: opening_time || '09:00',
-                closing_time: closing_time || '22:00',
+                admin_opening_time: admin_opening_time || '09:00',
+                admin_closing_time: admin_closing_time || '22:00',
                 preparation_time: preparation_time || 30
             })
             .select()

@@ -28,8 +28,8 @@ export default function AddRestaurantModal({ isOpen, onClose, onSuccess }: AddRe
         platform_fee_per_order: '5',
         badge_text: '',
         show_menu_images: true,
-        opening_time: '09:00',
-        closing_time: '22:00',
+        admin_opening_time: '09:00',
+        admin_closing_time: '22:00',
         preparation_time: '30',
     });
 
@@ -157,8 +157,8 @@ export default function AddRestaurantModal({ isOpen, onClose, onSuccess }: AddRe
                                     required
                                     type="time"
                                     className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all text-black bg-white"
-                                    value={formData.opening_time}
-                                    onChange={e => handleChange('opening_time', e.target.value)}
+                                    value={formData.admin_opening_time}
+                                    onChange={e => handleChange('admin_opening_time', e.target.value)}
                                 />
                             </div>
                             <div>
@@ -167,8 +167,8 @@ export default function AddRestaurantModal({ isOpen, onClose, onSuccess }: AddRe
                                     required
                                     type="time"
                                     className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all text-black bg-white"
-                                    value={formData.closing_time}
-                                    onChange={e => handleChange('closing_time', e.target.value)}
+                                    value={formData.admin_closing_time}
+                                    onChange={e => handleChange('admin_closing_time', e.target.value)}
                                 />
                             </div>
                         </div>
