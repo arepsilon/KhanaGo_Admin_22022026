@@ -9,16 +9,16 @@ import jsPDF from 'jspdf';
 type Restaurant = {
     id: string;
     name: string;
-    commission_percent: number;
     phone?: string;
     platform_fee_per_order?: number;
-    transaction_charge_percent?: number;
+    city_id?: string | null;
 };
 
 type OrderItem = {
     id: string;
     quantity: number;
     unit_price: number;
+    base_price: number;
     menu_item: any;
     name?: string;
 };
@@ -31,10 +31,6 @@ type Order = {
     order_items: OrderItem[];
 };
 
-type FeeSettings = {
-    platform_fee: number;
-    transaction_fee_percent: number;
-};
 
 export default function PaymentReports() {
     const supabase = createClient();
@@ -47,17 +43,27 @@ export default function PaymentReports() {
     const [orders, setOrders] = useState<Order[]>([]);
     const [loading, setLoading] = useState(false);
     const [loadingRestaurants, setLoadingRestaurants] = useState(true);
-    const [feeSettings, setFeeSettings] = useState<FeeSettings>({ platform_fee: 5, transaction_fee_percent: 2 });
+    const [cities, setCities] = useState<{ id: string; name: string }[]>([]);
+    const [selectedCityId, setSelectedCityId] = useState<string>('all');
     const [reportGenerated, setReportGenerated] = useState(false);
     const [isSharing, setIsSharing] = useState(false);
     const [payingOut, setPayingOut] = useState(false);
+    const [overallStats, setOverallStats] = useState<{
+        totalPayable: number;
+        totalPaid: number;
+        balance: number;
+    } | null>(null);
+    const [drilldownData, setDrilldownData] = useState<any[]>([]);
+    const [showDrilldown, setShowDrilldown] = useState(false);
+    const [loadingStats, setLoadingStats] = useState(false);
 
     // Get restaurant details
     const restaurantDetails = restaurants.find(r => r.id === selectedRestaurant);
 
     useEffect(() => {
+        loadCities();
         loadRestaurants();
-        loadFeeSettings();
+        loadOverallStats();
         // Set default dates (current month)
         const now = new Date();
         const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -66,30 +72,115 @@ export default function PaymentReports() {
         setEndDate(lastDay.toISOString().split('T')[0]);
     }, []);
 
+    const loadCities = async () => {
+        const { data } = await supabase.from('cities').select('id, name').eq('is_active', true).order('name');
+        if (data) setCities(data);
+    };
+
     const loadRestaurants = async () => {
         const { data } = await supabase
             .from('restaurants')
-            .select('id, name, commission_percent, phone, platform_fee_per_order, transaction_charge_percent')
+            .select('id, name, phone, platform_fee_per_order, city_id')
             .order('name');
         if (data) setRestaurants(data);
         setLoadingRestaurants(false);
     };
 
-    const loadFeeSettings = async () => {
-        const { data } = await supabase
-            .from('fee_settings')
-            .select('*')
-            .single();
-        if (data) {
-            setFeeSettings({
-                platform_fee: data.platform_fee || 5,
-                transaction_fee_percent: data.transaction_fee_percent || 2
+    const filteredRestaurants = selectedCityId === 'all' 
+        ? restaurants 
+        : restaurants.filter(r => r.city_id === selectedCityId);
+
+    const loadOverallStats = async () => {
+        setLoadingStats(true);
+        try {
+            // 1. Fetch all restaurants
+            const { data: restaurantsData } = await supabase
+                .from('restaurants')
+                .select('id, name, platform_fee_per_order, city_id');
+
+            if (!restaurantsData) return;
+
+            // 2. Fetch all completed/delivered orders across all time
+            // (In a production app, this would be an aggregate RPC or View)
+            const { data: ordersData } = await supabase
+                .from('orders')
+                .select(`
+                    restaurant_id, subtotal, 
+                    order_items(quantity, unit_price, base_price)
+                `)
+                .in('status', ['delivered', 'completed']);
+
+            // 3. Fetch all payouts
+            const { data: payoutsData } = await supabase
+                .from('restaurant_payouts')
+                .select('restaurant_id, amount');
+
+            // 4. Calculate per-restaurant stats
+            const statsMap: Record<string, any> = {};
+            restaurantsData.forEach(r => {
+                statsMap[r.id] = {
+                    id: r.id,
+                    name: r.name,
+                    payable: 0,
+                    paid: 0,
+                    balance: 0,
+                    platform_fee_per_order: r.platform_fee_per_order ?? 0,
+                    city_id: r.city_id
+                };
             });
+
+            // Aggregate Payable (Earnings)
+            ordersData?.forEach((order: any) => {
+                const rId = order.restaurant_id;
+                if (!statsMap[rId]) return;
+
+                const baseTotal = order.order_items?.reduce((sum: number, item: any) => {
+                    const bp = item.base_price ?? item.unit_price;
+                    return sum + bp * item.quantity;
+                }, 0) ?? order.subtotal;
+
+                const platformFee = statsMap[rId].platform_fee_per_order;
+                statsMap[rId].payable += (baseTotal - platformFee);
+            });
+
+            // Aggregate Paid
+            payoutsData?.forEach((p: any) => {
+                const rId = p.restaurant_id;
+                if (statsMap[rId]) {
+                    statsMap[rId].paid += p.amount;
+                }
+            });
+
+            // Compute Balances and Overall Totals
+            let totalPayable = 0;
+            let totalPaid = 0;
+            const drilldown: any[] = [];
+
+            Object.values(statsMap).forEach((s: any) => {
+                s.balance = s.payable - s.paid;
+                totalPayable += s.payable;
+                totalPaid += s.paid;
+                drilldown.push(s);
+            });
+
+            setOverallStats({
+                totalPayable,
+                totalPaid,
+                balance: totalPayable - totalPaid
+            });
+            setDrilldownData(drilldown.sort((a, b) => b.balance - a.balance));
+
+        } catch (error) {
+            console.error('Error loading overall stats:', error);
+        } finally {
+            setLoadingStats(false);
         }
     };
 
-    const generateReport = async () => {
-        if (!selectedRestaurant || !startDate || !endDate) return;
+
+    const generateReport = async (overrideRestaurantId?: string) => {
+        const targetRestaurantId = overrideRestaurantId || selectedRestaurant;
+        if (!targetRestaurantId || !startDate || !endDate) return;
 
         setLoading(true);
         setReportGenerated(false);
@@ -108,7 +199,7 @@ export default function PaymentReports() {
         const endUTC = new Date(endBase.getTime() - IST_OFFSET_MS);
 
         console.log('Generating Report (IST Enforced):', {
-            selectedRestaurant,
+            targetRestaurantId,
             inputStart: startDate,
             queryStartUTC: startUTC.toISOString(),
             inputEnd: endDate,
@@ -119,9 +210,9 @@ export default function PaymentReports() {
             .from('orders')
             .select(`
                 id, order_number, created_at, subtotal, status,
-                order_items(id, quantity, unit_price, menu_item:menu_items(name))
+                order_items(id, quantity, unit_price, base_price, menu_item:menu_items(name))
             `)
-            .eq('restaurant_id', selectedRestaurant)
+            .eq('restaurant_id', targetRestaurantId)
             .in('status', ['delivered', 'completed'])
             .gte('created_at', startUTC.toISOString())
             .lte('created_at', endUTC.toISOString())
@@ -139,41 +230,31 @@ export default function PaymentReports() {
 
     // Calculations
     const calculateOrderDeductions = (order: Order) => {
-        const subtotal = order.subtotal || 0;
+        // Base total = restaurant's actual menu prices (sum of base_price × qty)
+        // Falls back to unit_price for pre-migration orders
+        const baseTotal = order.order_items?.reduce((sum, item) => {
+            const bp = item.base_price ?? item.unit_price;
+            return sum + bp * item.quantity;
+        }, 0) ?? (order.subtotal || 0);
 
-        // Prioritize Restaurant Specific settings, fallback to Global
-        // Ensure we check for null/undefined specifically as 0 is a valid value
-        const commissionPercent = restaurantDetails?.commission_percent ?? 0;
+        const platformFeeVal = restaurantDetails?.platform_fee_per_order ?? 0;
 
-        const platformFeeVal = (restaurantDetails?.platform_fee_per_order !== null && restaurantDetails?.platform_fee_per_order !== undefined)
-            ? restaurantDetails.platform_fee_per_order
-            : feeSettings.platform_fee;
-
-        const txFeePercent = (restaurantDetails?.transaction_charge_percent !== null && restaurantDetails?.transaction_charge_percent !== undefined)
-            ? restaurantDetails.transaction_charge_percent
-            : feeSettings.transaction_fee_percent;
-
-        const commission = subtotal * (commissionPercent / 100);
         const platformFee = platformFeeVal;
-        const transactionFee = subtotal * (txFeePercent / 100);
 
-        const totalDeductions = commission + platformFee + transactionFee;
-        const netPayable = subtotal - totalDeductions;
+        // Restaurant receives base price minus the per-order platform fee
+        const netPayable = baseTotal - platformFee;
 
-        return { commission, platformFee, transactionFee, totalDeductions, netPayable };
+        return { platformFee, netPayable, baseTotal };
     };
 
     const totals = orders.reduce((acc, order) => {
-        const deductions = calculateOrderDeductions(order);
+        const d = calculateOrderDeductions(order);
         return {
-            grossRevenue: acc.grossRevenue + order.subtotal,
-            totalCommission: acc.totalCommission + deductions.commission,
-            totalPlatformFee: acc.totalPlatformFee + deductions.platformFee,
-            totalTransactionFee: acc.totalTransactionFee + deductions.transactionFee,
-            totalDeductions: acc.totalDeductions + deductions.totalDeductions,
-            netPayable: acc.netPayable + deductions.netPayable,
+            baseRevenue: acc.baseRevenue + d.baseTotal,
+            totalPlatformFee: acc.totalPlatformFee + d.platformFee,
+            netPayable: acc.netPayable + d.netPayable,
         };
-    }, { grossRevenue: 0, totalCommission: 0, totalPlatformFee: 0, totalTransactionFee: 0, totalDeductions: 0, netPayable: 0 });
+    }, { baseRevenue: 0, totalPlatformFee: 0, netPayable: 0 });
 
     const handlePrint = () => {
         window.print();
@@ -223,8 +304,8 @@ export default function PaymentReports() {
             // Summary boxes
             const summaryData = [
                 { label: 'Total Orders', value: orders.length.toString() },
-                { label: 'Gross Revenue', value: `Rs. ${totals.grossRevenue.toFixed(2)}` },
-                { label: 'Total Deductions', value: `-Rs. ${totals.totalDeductions.toFixed(2)}` },
+                { label: 'Total Base Value', value: `Rs. ${totals.baseRevenue.toFixed(2)}` },
+                { label: 'Platform Fee Deduction', value: `-Rs. ${totals.totalPlatformFee.toFixed(2)}` },
                 { label: 'Net Payable', value: `Rs. ${totals.netPayable.toFixed(2)}` },
             ];
 
@@ -250,14 +331,8 @@ export default function PaymentReports() {
             pdf.setFontSize(10);
             pdf.setFont('helvetica', 'normal');
 
-            const effectivePlatformFee = restaurantDetails.platform_fee_per_order ?? feeSettings.platform_fee;
-            const effectiveTxPercent = restaurantDetails.transaction_charge_percent ?? feeSettings.transaction_fee_percent;
-
-            pdf.text(`Commission (${restaurantDetails.commission_percent}%): -Rs. ${totals.totalCommission.toFixed(2)}`, 15, yPos);
-            yPos += 6;
-            pdf.text(`Platform Fee (Rs. ${effectivePlatformFee}/order): -Rs. ${totals.totalPlatformFee.toFixed(2)}`, 15, yPos);
-            yPos += 6;
-            pdf.text(`Transaction Fee (${effectiveTxPercent}%): -Rs. ${totals.totalTransactionFee.toFixed(2)}`, 15, yPos);
+            const effectivePlatformFee = restaurantDetails.platform_fee_per_order ?? 0;
+            pdf.text(`Platform Fee (Rs. ${effectivePlatformFee}/order × ${orders.length} orders): -Rs. ${totals.totalPlatformFee.toFixed(2)}`, 15, yPos);
             yPos += 15;
 
             // Orders Table Header
@@ -273,11 +348,10 @@ export default function PaymentReports() {
             pdf.setFontSize(9);
             pdf.setTextColor(71, 85, 105);
             pdf.text('Order #', 17, yPos);
-            pdf.text('Date', 45, yPos);
-            pdf.text('Subtotal', 85, yPos);
-            pdf.text('Commission', 115, yPos);
-            pdf.text('Fees', 145, yPos);
-            pdf.text('Net', 175, yPos);
+            pdf.text('Date', 55, yPos);
+            pdf.text('Base Value', 105, yPos);
+            pdf.text('Platform Fee', 145, yPos);
+            pdf.text('Net', 178, yPos);
             yPos += 8;
 
             // Table rows
@@ -290,16 +364,15 @@ export default function PaymentReports() {
                     yPos = 20;
                 }
 
-                const deductions = calculateOrderDeductions(order);
+                const d = calculateOrderDeductions(order);
 
                 pdf.text(`#${order.order_number}`, 17, yPos);
-                pdf.text(formatDate(order.created_at), 45, yPos);
-                pdf.text(`Rs. ${order.subtotal.toFixed(2)}`, 85, yPos);
+                pdf.text(formatDate(order.created_at), 55, yPos);
+                pdf.text(`Rs. ${d.baseTotal.toFixed(2)}`, 105, yPos);
                 pdf.setTextColor(220, 38, 38);
-                pdf.text(`-Rs. ${deductions.commission.toFixed(2)}`, 115, yPos);
-                pdf.text(`-Rs. ${(deductions.platformFee + deductions.transactionFee).toFixed(2)}`, 145, yPos);
+                pdf.text(`-Rs. ${d.platformFee.toFixed(2)}`, 145, yPos);
                 pdf.setTextColor(22, 163, 74);
-                pdf.text(`Rs. ${deductions.netPayable.toFixed(2)}`, 175, yPos);
+                pdf.text(`Rs. ${d.netPayable.toFixed(2)}`, 178, yPos);
                 pdf.setTextColor(0, 0, 0);
                 yPos += 6;
             });
@@ -311,12 +384,11 @@ export default function PaymentReports() {
 
             pdf.setFont('helvetica', 'bold');
             pdf.text('TOTAL', 17, yPos + 2);
-            pdf.text(`Rs. ${totals.grossRevenue.toFixed(2)}`, 85, yPos + 2);
+            pdf.text(`Rs. ${totals.baseRevenue.toFixed(2)}`, 105, yPos + 2);
             pdf.setTextColor(220, 38, 38);
-            pdf.text(`-Rs. ${totals.totalCommission.toFixed(2)}`, 115, yPos + 2);
-            pdf.text(`-Rs. ${(totals.totalPlatformFee + totals.totalTransactionFee).toFixed(2)}`, 145, yPos + 2);
+            pdf.text(`-Rs. ${totals.totalPlatformFee.toFixed(2)}`, 145, yPos + 2);
             pdf.setTextColor(22, 163, 74);
-            pdf.text(`Rs. ${totals.netPayable.toFixed(2)}`, 175, yPos + 2);
+            pdf.text(`Rs. ${totals.netPayable.toFixed(2)}`, 178, yPos + 2);
 
             // Generate filename and save
             const filename = `Payment_Report_${restaurantDetails.name.replace(/\s+/g, '_')}_${startDate}_to_${endDate}.pdf`;
@@ -388,11 +460,140 @@ Please confirm receipt of this report.`;
 
     return (
         <div className="space-y-6">
+            {/* KPI Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div 
+                    onClick={() => setShowDrilldown(!showDrilldown)}
+                    className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 cursor-pointer hover:border-orange-200 transition-all"
+                >
+                    <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-orange-50 rounded-xl flex items-center justify-center">
+                            <Wallet className="w-6 h-6 text-orange-600" />
+                        </div>
+                        <div>
+                            <p className="text-sm font-medium text-slate-500">Amount Earned (Payable)</p>
+                            <h3 className="text-2xl font-bold text-slate-900">
+                                {loadingStats ? <Loader2 className="w-5 h-5 animate-spin" /> : `₹${overallStats?.totalPayable?.toFixed(1) || '0.0'}`}
+                            </h3>
+                        </div>
+                    </div>
+                </div>
+
+                <div 
+                    onClick={() => setShowDrilldown(!showDrilldown)}
+                    className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 cursor-pointer hover:border-green-200 transition-all"
+                >
+                    <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-green-50 rounded-xl flex items-center justify-center">
+                            <Download className="w-6 h-6 text-green-600" />
+                        </div>
+                        <div>
+                            <p className="text-sm font-medium text-slate-500">Amount Paid</p>
+                            <h3 className="text-2xl font-bold text-slate-900">
+                                {loadingStats ? <Loader2 className="w-5 h-5 animate-spin" /> : `₹${overallStats?.totalPaid?.toFixed(1) || '0.0'}`}
+                            </h3>
+                        </div>
+                    </div>
+                </div>
+
+                <div 
+                    onClick={() => setShowDrilldown(!showDrilldown)}
+                    className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 cursor-pointer hover:border-blue-200 transition-all"
+                >
+                    <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center">
+                            <Building2 className="w-6 h-6 text-blue-600" />
+                        </div>
+                        <div>
+                            <p className="text-sm font-medium text-slate-500">Pending Balance</p>
+                            <h3 className="text-2xl font-bold text-slate-900">
+                                {loadingStats ? <Loader2 className="w-5 h-5 animate-spin" /> : `₹${overallStats?.balance?.toFixed(1) || '0.0'}`}
+                            </h3>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Drilldown Table */}
+            {showDrilldown && (
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden animate-in slide-in-from-top duration-300">
+                    <div className="p-6 border-b border-slate-50 flex justify-between items-center">
+                        <h3 className="text-lg font-bold text-slate-900">Restaurant-wise Drilldown</h3>
+                        <button 
+                            onClick={() => setShowDrilldown(false)}
+                            className="text-slate-400 hover:text-slate-600 text-sm font-medium"
+                        >
+                            Close
+                        </button>
+                    </div>
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead className="bg-slate-50">
+                                <tr>
+                                    <th className="text-left p-4 font-semibold text-slate-600">Restaurant</th>
+                                    <th className="text-right p-4 font-semibold text-slate-600">Total Earned</th>
+                                    <th className="text-right p-4 font-semibold text-slate-600">Total Paid</th>
+                                    <th className="text-right p-4 font-semibold text-slate-600">Balance</th>
+                                    <th className="text-center p-4 font-semibold text-slate-600">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {drilldownData.map((s) => (
+                                    <tr key={s.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+                                        <td className="p-4 font-bold text-slate-900">{s.name}</td>
+                                        <td className="p-4 text-right text-slate-600">₹{s.payable.toFixed(1)}</td>
+                                        <td className="p-4 text-right text-green-600 font-medium">₹{s.paid.toFixed(1)}</td>
+                                        <td className="p-4 text-right font-bold text-slate-800">₹{s.balance.toFixed(1)}</td>
+                                        <td className="p-4 text-center">
+                                            <button 
+                                                onClick={() => {
+                                                    setSelectedCityId('all');
+                                                    setSelectedRestaurant(s.id);
+                                                    setShowDrilldown(false);
+                                                    // Immediately trigger report generation for the selected restaurant
+                                                    generateReport(s.id);
+                                                    // Scroll down to the report section
+                                                    window.scrollTo({ top: 400, behavior: 'smooth' });
+                                                }}
+                                                className="text-orange-600 font-semibold hover:underline"
+                                            >
+                                                View Report
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
             {/* Filters */}
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
                 <h2 className="text-lg font-semibold text-slate-800 mb-4">Generate Payment Report</h2>
 
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                    {/* City Selector */}
+                    <div>
+                        <label className="block text-sm font-medium text-slate-600 mb-2">City</label>
+                        <div className="relative">
+                            <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                            <select
+                                value={selectedCityId}
+                                onChange={(e) => {
+                                    setSelectedCityId(e.target.value);
+                                    setSelectedRestaurant(''); // Reset restaurant on city change
+                                }}
+                                className="w-full pl-10 pr-4 py-2.5 border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                            >
+                                <option value="all">All Cities</option>
+                                {cities.map(c => (
+                                    <option key={c.id} value={c.id}>{c.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+
                     {/* Restaurant Selector */}
                     <div>
                         <label className="block text-sm font-medium text-slate-600 mb-2">Restaurant</label>
@@ -405,7 +606,7 @@ Please confirm receipt of this report.`;
                                 disabled={loadingRestaurants}
                             >
                                 <option value="">Select Restaurant</option>
-                                {restaurants.map(r => (
+                                {filteredRestaurants.map(r => (
                                     <option key={r.id} value={r.id}>{r.name}</option>
                                 ))}
                             </select>
@@ -443,7 +644,7 @@ Please confirm receipt of this report.`;
                     {/* Generate Button */}
                     <div className="flex items-end">
                         <button
-                            onClick={generateReport}
+                            onClick={() => generateReport()}
                             disabled={!selectedRestaurant || loading}
                             className="w-full bg-orange-500 text-white py-2.5 px-4 rounded-lg font-semibold hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                         >
@@ -478,12 +679,12 @@ Please confirm receipt of this report.`;
                             <p className="text-2xl font-bold text-slate-800">{orders.length}</p>
                         </div>
                         <div className="bg-white p-4 rounded-lg border border-slate-200">
-                            <p className="text-sm text-slate-500">Gross Revenue</p>
-                            <p className="text-2xl font-bold text-slate-800">₹{totals.grossRevenue.toFixed(2)}</p>
+                            <p className="text-sm text-slate-500">Total Base Value</p>
+                            <p className="text-2xl font-bold text-slate-800">₹{totals.baseRevenue.toFixed(2)}</p>
                         </div>
-                        <div className="bg-white p-4 rounded-lg border border-slate-200">
-                            <p className="text-sm text-slate-500">Total Deductions</p>
-                            <p className="text-2xl font-bold text-red-500">-₹{totals.totalDeductions.toFixed(2)}</p>
+                        <div className="bg-white p-4 rounded-lg border border-red-200 bg-red-50">
+                            <p className="text-sm text-red-500">Platform Fee Deduction</p>
+                            <p className="text-2xl font-bold text-red-500">-₹{totals.totalPlatformFee.toFixed(2)}</p>
                         </div>
                         <div className="bg-white p-4 rounded-lg border border-green-200 bg-green-50">
                             <p className="text-sm text-green-600">Net Payable</p>
@@ -499,15 +700,14 @@ Please confirm receipt of this report.`;
                                     <th className="text-left p-3 font-semibold text-slate-600">Order #</th>
                                     <th className="text-left p-3 font-semibold text-slate-600">Date</th>
                                     <th className="text-left p-3 font-semibold text-slate-600">Items</th>
-                                    <th className="text-right p-3 font-semibold text-slate-600">Subtotal</th>
-                                    <th className="text-right p-3 font-semibold text-slate-600">Commission</th>
-                                    <th className="text-right p-3 font-semibold text-slate-600">Fees</th>
+                                    <th className="text-right p-3 font-semibold text-slate-600">Base Value</th>
+                                    <th className="text-right p-3 font-semibold text-slate-600">Platform Fee</th>
                                     <th className="text-right p-3 font-semibold text-slate-600">Net</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {orders.map((order) => {
-                                    const deductions = calculateOrderDeductions(order);
+                                    const d = calculateOrderDeductions(order);
                                     return (
                                         <tr key={order.id} className="border-b border-slate-100 hover:bg-slate-50">
                                             <td className="p-3 font-medium text-slate-800">#{order.order_number}</td>
@@ -526,10 +726,9 @@ Please confirm receipt of this report.`;
                                                     })}
                                                 </ul>
                                             </td>
-                                            <td className="p-3 text-right font-medium text-black">₹{order.subtotal.toFixed(2)}</td>
-                                            <td className="p-3 text-right text-red-500">-₹{deductions.commission.toFixed(2)}</td>
-                                            <td className="p-3 text-right text-red-500">-₹{(deductions.platformFee + deductions.transactionFee).toFixed(2)}</td>
-                                            <td className="p-3 text-right font-semibold text-green-600">₹{deductions.netPayable.toFixed(2)}</td>
+                                            <td className="p-3 text-right font-medium text-slate-800">₹{d.baseTotal.toFixed(2)}</td>
+                                            <td className="p-3 text-right text-red-500">-₹{d.platformFee.toFixed(2)}</td>
+                                            <td className="p-3 text-right font-semibold text-green-600">₹{d.netPayable.toFixed(2)}</td>
                                         </tr>
                                     );
                                 })}
@@ -537,50 +736,12 @@ Please confirm receipt of this report.`;
                             <tfoot className="bg-slate-100 font-semibold">
                                 <tr>
                                     <td colSpan={3} className="p-3">Total</td>
-                                    <td className="p-3 text-right">₹{totals.grossRevenue.toFixed(2)}</td>
-                                    <td className="p-3 text-right text-red-500">-₹{totals.totalCommission.toFixed(2)}</td>
-                                    <td className="p-3 text-right text-red-500">-₹{(totals.totalPlatformFee + totals.totalTransactionFee).toFixed(2)}</td>
+                                    <td className="p-3 text-right">₹{totals.baseRevenue.toFixed(2)}</td>
+                                    <td className="p-3 text-right text-red-500">-₹{totals.totalPlatformFee.toFixed(2)}</td>
                                     <td className="p-3 text-right text-green-600">₹{totals.netPayable.toFixed(2)}</td>
                                 </tr>
                             </tfoot>
                         </table>
-                    </div>
-
-                    {/* Deduction Breakdown */}
-                    <div className="p-6 bg-slate-50 border-t border-slate-200">
-                        <h3 className="font-semibold text-slate-700 mb-3">Deduction Breakdown</h3>
-                        <div className="grid grid-cols-3 gap-4 text-sm">
-                            <div className="flex justify-between">
-                                <span className="text-slate-500">Commission ({restaurantDetails?.commission_percent}%)</span>
-                                <span className="font-medium text-red-500">-₹{totals.totalCommission.toFixed(2)}</span>
-                            </div>
-                            <div className="flex justify-between">
-                                {(() => {
-                                    const effectivePlatformFee = (restaurantDetails?.platform_fee_per_order !== null && restaurantDetails?.platform_fee_per_order !== undefined)
-                                        ? restaurantDetails.platform_fee_per_order
-                                        : feeSettings.platform_fee;
-                                    return (
-                                        <>
-                                            <span className="text-slate-500">Platform Fee (₹{effectivePlatformFee}/order)</span>
-                                            <span className="font-medium text-red-500">-₹{totals.totalPlatformFee.toFixed(2)}</span>
-                                        </>
-                                    );
-                                })()}
-                            </div>
-                            <div className="flex justify-between">
-                                {(() => {
-                                    const effectiveTxPercent = (restaurantDetails?.transaction_charge_percent !== null && restaurantDetails?.transaction_charge_percent !== undefined)
-                                        ? restaurantDetails.transaction_charge_percent
-                                        : feeSettings.transaction_fee_percent;
-                                    return (
-                                        <>
-                                            <span className="text-slate-500">Transaction Fee ({effectiveTxPercent}%)</span>
-                                            <span className="font-medium text-red-500">-₹{totals.totalTransactionFee.toFixed(2)}</span>
-                                        </>
-                                    );
-                                })()}
-                            </div>
-                        </div>
                     </div>
 
                     {/* Action Buttons (Hidden in Print) */}

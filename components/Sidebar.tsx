@@ -22,7 +22,8 @@ import {
     Layers,
     Tag,
     Receipt,
-    Bell
+    Bell,
+    MapPin
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -100,6 +101,7 @@ export default function Sidebar() {
         { name: 'Promos', href: '/dashboard/ads', icon: Megaphone },
         { name: 'Coupons', href: '/dashboard/coupons', icon: Tag },
         ...(userEmail === '9867109138@khanago.admin' ? [{ name: 'Notifications', href: '/dashboard/notifications', icon: Bell }] : []),
+        { name: 'Cities', href: '/dashboard/cities', icon: MapPin },
         { name: 'Settings', href: '/dashboard/settings', icon: Settings },
     ];
 

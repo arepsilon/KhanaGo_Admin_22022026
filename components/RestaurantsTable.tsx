@@ -30,12 +30,15 @@ interface Restaurant {
     show_menu_images: boolean;
     is_test: boolean;
     preparation_time: number;
+    serviceable_radius_km: number;
 }
 
 export default function RestaurantsTable() {
     const [restaurants, setRestaurants] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState('all');
+    const [cities, setCities] = useState<any[]>([]);
+    const [cityFilter, setCityFilter] = useState<string>('all');
     const [expandedRestaurants, setExpandedRestaurants] = useState<Set<string>>(new Set());
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
     const [isReorderModalOpen, setIsReorderModalOpen] = useState(false);
@@ -43,6 +46,15 @@ export default function RestaurantsTable() {
     const [selectedRestaurantForMenu, setSelectedRestaurantForMenu] = useState<any | null>(null);
     const [resettingPasswordId, setResettingPasswordId] = useState<string | null>(null);
     const supabase = createClient();
+
+    useEffect(() => {
+        supabase
+            .from('cities')
+            .select('id, name')
+            .eq('is_active', true)
+            .order('name')
+            .then(({ data }) => setCities(data || []));
+    }, []);
 
     useEffect(() => {
         fetchRestaurants();
@@ -67,7 +79,7 @@ export default function RestaurantsTable() {
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [filter]);
+    }, [filter, cityFilter]);
 
     // Background checker for operating hours
     useEffect(() => {
@@ -120,7 +132,8 @@ export default function RestaurantsTable() {
             .from('restaurants')
             .select(`
                 *,
-                orders:orders(count)
+                orders:orders(count),
+                city:cities(id, name)
             `)
             .not('orders.status', 'eq', 'cancelled')
             .order('sort_order', { ascending: true });
@@ -129,6 +142,10 @@ export default function RestaurantsTable() {
             query = query.eq('is_active', true);
         } else if (filter === 'inactive') {
             query = query.eq('is_active', false);
+        }
+
+        if (cityFilter !== 'all') {
+            query = query.eq('city_id', cityFilter);
         }
 
         const { data, error } = await query;
@@ -219,6 +236,20 @@ export default function RestaurantsTable() {
 
         if (error) {
             alert(`Error updating ${field} `);
+            console.error(error);
+        } else {
+            fetchRestaurants();
+        }
+    };
+
+    const updateGenericFields = async (restaurantId: string, updates: any) => {
+        const { error } = await supabase
+            .from('restaurants')
+            .update(updates)
+            .eq('id', restaurantId);
+
+        if (error) {
+            alert(`Error updating fields`);
             console.error(error);
         } else {
             fetchRestaurants();
@@ -361,7 +392,7 @@ export default function RestaurantsTable() {
                         </button>
                     </div>
                 </div>
-                <div className="flex gap-2 flex-wrap">
+                <div className="flex gap-2 flex-wrap items-center">
                     {['all', 'active', 'inactive'].map((status) => (
                         <button
                             key={status}
@@ -374,6 +405,16 @@ export default function RestaurantsTable() {
                             {status.toUpperCase()}
                         </button>
                     ))}
+                    <select
+                        value={cityFilter}
+                        onChange={(e) => setCityFilter(e.target.value)}
+                        className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 border border-gray-200 hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-400 transition-colors"
+                    >
+                        <option value="all">All Cities</option>
+                        {cities.map((city) => (
+                            <option key={city.id} value={city.id}>{city.name}</option>
+                        ))}
+                    </select>
                 </div>
             </div>
 
@@ -407,7 +448,12 @@ export default function RestaurantsTable() {
                                                     <Store className="w-5 h-5 text-orange-600" />
                                                 </div>
                                                 <div>
-                                                    <h3 className="font-semibold text-gray-900">{restaurant.name}</h3>
+                                                    <div className="flex items-center gap-2">
+                                                        <h3 className="font-semibold text-gray-900">{restaurant.name}</h3>
+                                                        <span className="px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-100 rounded text-xs font-medium">
+                                                            {restaurant.city?.name || 'No city'}
+                                                        </span>
+                                                    </div>
                                                     <p className="text-sm text-gray-500">{restaurant.address.split(',')[0]} (ID: {restaurant.id.slice(0, 8)})</p>
                                                 </div>
                                             </div>
@@ -554,25 +600,10 @@ export default function RestaurantsTable() {
                                                         <span className="text-gray-400 mt-0.5">📍</span>
                                                         <p className="flex-1">{restaurant.address}</p>
                                                     </div>
-                                                    <div className="flex gap-4 pt-2">
-                                                        <div>
-                                                            <p className="text-xs text-gray-400">Delivery Fee</p>
-                                                            <p className="font-medium text-gray-900">₹{restaurant.delivery_fee?.toFixed(2) || '0.00'}</p>
-                                                        </div>
-                                                        <div>
-                                                            <p className="text-xs text-gray-400">Min Order</p>
-                                                            <p className="font-medium text-gray-900">₹{restaurant.minimum_order || 0}</p>
-                                                        </div>
-                                                        <div>
-                                                            <p className="text-xs text-gray-400">Prep Time (Min)</p>
-                                                            <input
-                                                                type="number"
-                                                                defaultValue={restaurant.preparation_time || 30}
-                                                                onBlur={(e) => updateGenericField(restaurant.id, 'preparation_time', parseInt(e.target.value))}
-                                                                className="w-16 px-1 py-0.5 border border-gray-200 rounded text-xs font-medium text-gray-900 focus:ring-1 focus:ring-orange-500 outline-none"
-                                                            />
-                                                        </div>
-                                                    </div>
+                                        <GeneralSettingsEditor 
+                                            restaurant={restaurant}
+                                            onUpdate={(updates) => updateGenericFields(restaurant.id, updates)}
+                                        />
                                                 </div>
                                             </div>
 
@@ -587,39 +618,25 @@ export default function RestaurantsTable() {
                                     </div>
 
                                     {/* Platform Fees & Config */}
-                                    <div className="mb-8 p-4 bg-white border border-gray-200 rounded-xl shadow-sm">
-                                        <h4 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                                            <span className="text-gray-400"><CreditCard size={18} /></span>
-                                            <span>Platform Fees & Charges</span>
-                                        </h4>
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                            <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
-                                                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Commission (%)</label>
-                                                <input
-                                                    type="number"
-                                                    defaultValue={restaurant.commission_percent || 15}
-                                                    onBlur={(e) => updateGenericField(restaurant.id, 'commission_percent', parseFloat(e.target.value))}
-                                                    className="w-full px-3 py-2 text-lg font-bold bg-white border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none"
-                                                />
-                                            </div>
-                                            <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
-                                                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Tx Charge (%)</label>
-                                                <input
-                                                    type="number"
-                                                    defaultValue={restaurant.transaction_charge_percent || 2.5}
-                                                    onBlur={(e) => updateGenericField(restaurant.id, 'transaction_charge_percent', parseFloat(e.target.value))}
-                                                    className="w-full px-3 py-2 text-lg font-bold bg-white border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                                                />
-                                            </div>
-                                            <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
-                                                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Platform Fee (₹)</label>
-                                                <input
-                                                    type="number"
-                                                    defaultValue={restaurant.platform_fee_per_order || 5}
-                                                    onBlur={(e) => updateGenericField(restaurant.id, 'platform_fee_per_order', parseFloat(e.target.value))}
-                                                    className="w-full px-3 py-2 text-lg font-bold bg-white border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 outline-none"
-                                                />
-                                            </div>
+                                    <PlatformConfigEditor
+                                        restaurant={restaurant}
+                                        onUpdate={(updates) => updateGenericFields(restaurant.id, updates)}
+                                    />
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                                        <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                                            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">City Boundary (Legacy)</label>
+                                            <select
+                                                defaultValue={restaurant.city_id || ''}
+                                                onChange={(e) => updateGenericField(restaurant.id, 'city_id', e.target.value || null)}
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="w-full px-3 py-3 text-sm font-medium bg-white border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                            >
+                                                <option value="">No city</option>
+                                                {cities.map((city) => (
+                                                    <option key={city.id} value={city.id}>{city.name}</option>
+                                                ))}
+                                            </select>
                                         </div>
                                     </div>
 
@@ -938,6 +955,159 @@ function LocationEditor({ restaurant, onUpdate }: { restaurant: any, onUpdate: (
             >
                 {isDirty ? 'Update Location' : 'Location Saved'}
             </button>
+        </div>
+    );
+}
+
+function GeneralSettingsEditor({ restaurant, onUpdate }: { restaurant: any, onUpdate: (updates: any) => void }) {
+    const [config, setConfig] = useState({
+        minimum_order: restaurant.minimum_order ?? 0,
+        preparation_time: restaurant.preparation_time ?? 30
+    });
+    const [isDirty, setIsDirty] = useState(false);
+
+    useEffect(() => {
+        const hasChanged = 
+            config.minimum_order !== (restaurant.minimum_order ?? 0) ||
+            config.preparation_time !== (restaurant.preparation_time ?? 30);
+        setIsDirty(hasChanged);
+    }, [config, restaurant]);
+
+    const handleSave = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        onUpdate({
+            ...config,
+            estimated_delivery_time: config.preparation_time // Keep in sync
+        });
+        setIsDirty(false);
+    };
+
+    return (
+        <div className="flex flex-wrap gap-4 pt-2 items-center">
+            <div>
+                <p className="text-xs text-gray-400">Delivery Fee</p>
+                <p className="font-medium text-gray-900">₹{restaurant.delivery_fee?.toFixed(2) ?? '0.00'}</p>
+            </div>
+            <div>
+                <p className="text-xs text-gray-400">Min Order (₹)</p>
+                <input
+                    type="number"
+                    value={config.minimum_order}
+                    onChange={(e) => setConfig(prev => ({ ...prev, minimum_order: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 }))}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-20 px-2 py-1 border border-gray-200 rounded text-sm font-medium text-gray-900 focus:ring-1 focus:ring-orange-500 outline-none"
+                />
+            </div>
+            <div>
+                <p className="text-xs text-gray-400">Prep Time (Min)</p>
+                <input
+                    type="number"
+                    value={config.preparation_time}
+                    onChange={(e) => setConfig(prev => ({ ...prev, preparation_time: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 }))}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-20 px-2 py-1 border border-gray-200 rounded text-sm font-medium text-gray-900 focus:ring-1 focus:ring-orange-500 outline-none"
+                />
+            </div>
+            {isDirty && (
+                <button
+                    onClick={handleSave}
+                    className="px-3 py-1 bg-orange-100 text-orange-600 rounded-md text-xs font-bold hover:bg-orange-200 transition-colors"
+                >
+                    SAVE
+                </button>
+            )}
+        </div>
+    );
+}
+
+function PlatformConfigEditor({ restaurant, onUpdate }: { restaurant: any, onUpdate: (updates: any) => void }) {
+    const [config, setConfig] = useState({
+        commission_percent: restaurant.commission_percent ?? 15,
+        transaction_charge_percent: restaurant.transaction_charge_percent ?? 2.5,
+        platform_fee_per_order: restaurant.platform_fee_per_order ?? 5,
+        serviceable_radius_km: restaurant.serviceable_radius_km ?? 5.0
+    });
+    const [isDirty, setIsDirty] = useState(false);
+
+    useEffect(() => {
+        const hasChanged = 
+            config.commission_percent !== (restaurant.commission_percent ?? 15) ||
+            config.transaction_charge_percent !== (restaurant.transaction_charge_percent ?? 2.5) ||
+            config.platform_fee_per_order !== (restaurant.platform_fee_per_order ?? 5) ||
+            config.serviceable_radius_km !== (restaurant.serviceable_radius_km ?? 5.0);
+        setIsDirty(hasChanged);
+    }, [config, restaurant]);
+
+    const handleSave = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        onUpdate(config);
+        setIsDirty(false);
+        alert('Platform configuration saved! 🛡️');
+    };
+
+    return (
+        <div className="mb-8 p-4 bg-white border border-gray-200 rounded-xl shadow-sm">
+            <h4 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <span className="text-gray-400"><CreditCard size={18} /></span>
+                <span>Platform Fees & Charges</span>
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Commission (%)</label>
+                    <input
+                        type="number"
+                        value={config.commission_percent}
+                        onChange={(e) => setConfig(prev => ({ ...prev, commission_percent: e.target.value === '' ? 0 : parseFloat(e.target.value) }))}
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-full px-3 py-2 text-lg font-bold bg-white border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none"
+                    />
+                </div>
+                <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Tx Charge (%)</label>
+                    <input
+                        type="number"
+                        value={config.transaction_charge_percent}
+                        onChange={(e) => setConfig(prev => ({ ...prev, transaction_charge_percent: e.target.value === '' ? 0 : parseFloat(e.target.value) }))}
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-full px-3 py-2 text-lg font-bold bg-white border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                    />
+                </div>
+                <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Platform Fee (₹)</label>
+                    <input
+                        type="number"
+                        value={config.platform_fee_per_order}
+                        onChange={(e) => setConfig(prev => ({ ...prev, platform_fee_per_order: e.target.value === '' ? 0 : parseFloat(e.target.value) }))}
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-full px-3 py-2 text-lg font-bold bg-white border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 outline-none"
+                    />
+                </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Serviceable Radius (km)</label>
+                    <input
+                        type="number"
+                        step="0.1"
+                        value={config.serviceable_radius_km}
+                        onChange={(e) => setConfig(prev => ({ ...prev, serviceable_radius_km: e.target.value === '' ? 0 : parseFloat(e.target.value) }))}
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-full px-3 py-2 text-lg font-bold bg-white border border-gray-200 rounded-lg focus:ring-2 focus:ring-rose-500 outline-none"
+                    />
+                </div>
+                <div className="flex items-end mb-1">
+                    <button
+                        disabled={!isDirty}
+                        onClick={handleSave}
+                        className={`w-full py-2.5 text-sm font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${isDirty
+                                ? 'bg-orange-600 hover:bg-orange-700 text-white shadow-md shadow-orange-100 cursor-pointer'
+                                : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                            }`}
+                    >
+                        {isDirty ? 'Update Config' : 'Configuration Saved'}
+                    </button>
+                </div>
+            </div>
         </div>
     );
 }

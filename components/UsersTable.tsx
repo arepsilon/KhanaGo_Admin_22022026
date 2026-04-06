@@ -20,7 +20,8 @@ export default function UsersTable() {
                 orders(count)
             `)
             .eq('role', 'customer')
-            .order('created_at', { ascending: false });
+            .order('created_at', { ascending: false })
+            .limit(100);
 
         if (error) {
             console.error('Error fetching users:', error);

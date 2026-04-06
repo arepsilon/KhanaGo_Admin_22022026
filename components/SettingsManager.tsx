@@ -2,12 +2,16 @@
 
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { Save, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Save, AlertCircle, CheckCircle2, MapPin } from 'lucide-react';
 
 export default function SettingsManager() {
     const supabase = createClient();
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+
+    // City state
+    const [cities, setCities] = useState<any[]>([]);
+    const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
 
     // Settings State
     const [minVersion, setMinVersion] = useState('1.0.0');
@@ -18,6 +22,11 @@ export default function SettingsManager() {
     const [platformFee, setPlatformFee] = useState('5');
     const [whatsappNumber, setWhatsappNumber] = useState('918149875162');
     const [showMenuImages, setShowMenuImages] = useState(true);
+
+    // Surge Pricing State
+    const [isSurgeActive, setIsSurgeActive] = useState(false);
+    const [surgeFee, setSurgeFee] = useState('0');
+    const [surgeReason, setSurgeReason] = useState('High Demand');
 
     // Grocery Specific State
     const [groceryDeliveryCharge, setGroceryDeliveryCharge] = useState('15');
@@ -32,14 +41,46 @@ export default function SettingsManager() {
     const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
     useEffect(() => {
-        loadSettings();
+        loadCities();
     }, []);
 
+    useEffect(() => {
+        if (selectedCityId !== undefined) {
+            loadSettings();
+        }
+    }, [selectedCityId]);
+
+    const loadCities = async () => {
+        const { data } = await supabase
+            .from('cities')
+            .select('id, name')
+            .eq('is_active', true)
+            .order('name');
+
+        if (data && data.length > 0) {
+            setCities(data);
+            setSelectedCityId(data[0].id); // Default to first city
+        } else {
+            // No cities — load global settings
+            setSelectedCityId(null);
+            loadSettings();
+        }
+    };
+
     const loadSettings = async () => {
+        setLoading(true);
         try {
-            const { data, error } = await supabase
+            let query = supabase
                 .from('app_settings')
                 .select('*');
+
+            if (selectedCityId) {
+                query = query.eq('city_id', selectedCityId);
+            } else {
+                query = query.is('city_id', null);
+            }
+
+            const { data, error } = await query;
 
             if (error) throw error;
 
@@ -61,6 +102,10 @@ export default function SettingsManager() {
                 const grocMin = data.find(s => s.key === 'grocery_minimum_order')?.value;
                 const grocFree = data.find(s => s.key === 'grocery_free_delivery_above')?.value;
 
+                const sActive = data.find(s => s.key === 'is_surge_active')?.value;
+                const sFee = data.find(s => s.key === 'surge_fee')?.value;
+                const sReason = data.find(s => s.key === 'surge_reason')?.value;
+
                 if (version !== undefined) setMinVersion(String(version).replace(/"/g, ''));
                 if (radius !== undefined) setDeliveryRadius(String(radius));
                 if (grocery !== undefined) setEnableGrocery(Boolean(grocery));
@@ -77,6 +122,10 @@ export default function SettingsManager() {
                 if (rpEnabled !== undefined) setRazorpayEnabled(Boolean(rpEnabled));
                 if (rpKeyId !== undefined) setRazorpayKeyId(String(rpKeyId).replace(/"/g, ''));
                 if (rpSecret !== undefined) setRazorpayKeySecret(String(rpSecret).replace(/"/g, ''));
+
+                if (sActive !== undefined) setIsSurgeActive(Boolean(sActive));
+                if (sFee !== undefined) setSurgeFee(String(sFee));
+                if (sReason !== undefined) setSurgeReason(String(sReason).replace(/"/g, ''));
             }
         } catch (error) {
             console.error('Error loading settings:', error);
@@ -92,36 +141,41 @@ export default function SettingsManager() {
 
         try {
             const updates = [
-                { key: 'min_supported_version', value: JSON.stringify(minVersion), description: 'Minimum supported version' },
-                { key: 'delivery_radius_km', value: parseFloat(deliveryRadius), description: 'Max delivery radius in KM' },
-                { key: 'enable_grocery', value: enableGrocery, description: 'Enable Grocery Module' },
-                { key: 'base_delivery_fee', value: parseFloat(baseDeliveryFee), description: 'Base delivery fee (up to 2km)' },
-                { key: 'per_km_fee', value: parseFloat(perKmFee), description: 'Fee per km after base distance' },
-                { key: 'platform_fee', value: parseFloat(platformFee), description: 'Platform fee per order' },
-                { key: 'whatsapp_support_url', value: JSON.stringify(whatsappNumber), description: 'WhatsApp support number for customers' },
+                { key: 'min_supported_version', value: JSON.stringify(minVersion), description: 'Minimum supported version', city_id: selectedCityId },
+                { key: 'delivery_radius_km', value: parseFloat(deliveryRadius), description: 'Max delivery radius in KM', city_id: selectedCityId },
+                { key: 'enable_grocery', value: enableGrocery, description: 'Enable Grocery Module', city_id: selectedCityId },
+                { key: 'base_delivery_fee', value: parseFloat(baseDeliveryFee), description: 'Base delivery fee (up to 2km)', city_id: selectedCityId },
+                { key: 'per_km_fee', value: parseFloat(perKmFee), description: 'Fee per km after base distance', city_id: selectedCityId },
+                { key: 'platform_fee', value: parseFloat(platformFee), description: 'Platform fee per order', city_id: selectedCityId },
+                { key: 'whatsapp_support_url', value: JSON.stringify(whatsappNumber), description: 'WhatsApp support number for customers', city_id: selectedCityId },
 
                 // Grocery specific
-                { key: 'grocery_delivery_charge', value: parseFloat(groceryDeliveryCharge) || 0, description: 'Delivery fee for grocery orders' },
-                { key: 'grocery_minimum_order', value: parseFloat(groceryMinimumOrder) || 0, description: 'Minimum order amount for grocery' },
-                { key: 'grocery_free_delivery_above', value: parseFloat(groceryFreeDeliveryAbove) || 0, description: 'Free delivery threshold for grocery' },
+                { key: 'grocery_delivery_charge', value: parseFloat(groceryDeliveryCharge) || 0, description: 'Delivery fee for grocery orders', city_id: selectedCityId },
+                { key: 'grocery_minimum_order', value: parseFloat(groceryMinimumOrder) || 0, description: 'Minimum order amount for grocery', city_id: selectedCityId },
+                { key: 'grocery_free_delivery_above', value: parseFloat(groceryFreeDeliveryAbove) || 0, description: 'Free delivery threshold for grocery', city_id: selectedCityId },
 
                 // Razorpay updates
-                { key: 'razorpay_enabled', value: razorpayEnabled, description: 'Enable Razorpay payment gateway' },
-                { key: 'razorpay_key_id', value: JSON.stringify(razorpayKeyId), description: 'Razorpay Key ID' },
-                { key: 'razorpay_key_secret', value: JSON.stringify(razorpayKeySecret), description: 'Razorpay Key Secret' },
+                { key: 'razorpay_enabled', value: razorpayEnabled, description: 'Enable Razorpay payment gateway', city_id: selectedCityId },
+                { key: 'razorpay_key_id', value: JSON.stringify(razorpayKeyId), description: 'Razorpay Key ID', city_id: selectedCityId },
+                { key: 'razorpay_key_secret', value: JSON.stringify(razorpayKeySecret), description: 'Razorpay Key Secret', city_id: selectedCityId },
 
                 // Menu Image update
-                { key: 'show_menu_images', value: showMenuImages, description: 'Toggle visibility of menu item images in the customer app' }
+                { key: 'show_menu_images', value: showMenuImages, description: 'Toggle visibility of menu item images in the customer app', city_id: selectedCityId },
+
+                // Surge Pricing
+                { key: 'is_surge_active', value: isSurgeActive, description: 'Enable/Disable surge pricing for this city', city_id: selectedCityId },
+                { key: 'surge_fee', value: parseFloat(surgeFee) || 0, description: 'Flat surge fee amount', city_id: selectedCityId },
+                { key: 'surge_reason', value: JSON.stringify(surgeReason), description: 'Reason for surge shown to customers', city_id: selectedCityId }
             ];
 
             for (const update of updates) {
                 const { error } = await supabase
                     .from('app_settings')
-                    .upsert(update, { onConflict: 'key' });
+                    .upsert(update, { onConflict: 'key,city_id' });
                 if (error) throw error;
             }
 
-            setMessage({ type: 'success', text: 'Settings saved successfully' });
+            setMessage({ type: 'success', text: `Settings saved for ${cities.find(c => c.id === selectedCityId)?.name || 'Global'}` });
         } catch (error: any) {
             console.error('Error saving settings:', error);
             setMessage({ type: 'error', text: error.message || 'Failed to save settings' });
@@ -135,6 +189,26 @@ export default function SettingsManager() {
     return (
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-8 max-w-2xl">
             <h2 className="text-xl font-bold text-slate-900 mb-6">App Configuration</h2>
+
+            {/* City Selector */}
+            {cities.length > 0 && (
+                <div className="mb-6 p-4 rounded-xl border border-orange-200 bg-orange-50">
+                    <div className="flex items-center gap-2 mb-2">
+                        <MapPin size={16} className="text-orange-600" />
+                        <label className="text-sm font-semibold text-slate-900">Configure settings for:</label>
+                    </div>
+                    <select
+                        value={selectedCityId || ''}
+                        onChange={(e) => setSelectedCityId(e.target.value || null)}
+                        className="w-full px-4 py-3 rounded-xl border border-orange-300 text-slate-900 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all font-semibold bg-white"
+                    >
+                        {cities.map(city => (
+                            <option key={city.id} value={city.id}>{city.name}</option>
+                        ))}
+                    </select>
+                    <p className="text-xs text-orange-600 mt-1">Each city has its own fees, delivery settings, and configuration.</p>
+                </div>
+            )}
 
             {message && (
                 <div className={`p-4 rounded-xl mb-6 flex items-center gap-3 ${message.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
@@ -202,6 +276,53 @@ export default function SettingsManager() {
                             <div className="absolute right-4 top-3 text-slate-500 font-medium">₹</div>
                         </div>
                     </div>
+                </div>
+                
+                {/* Surge Pricing Section */}
+                <div className="p-6 rounded-xl border border-orange-100 bg-orange-50/30 space-y-4">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h3 className="font-bold text-slate-900">Surge Pricing</h3>
+                            <p className="text-sm text-slate-500">Enable additional fees for high demand or rain</p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={isSurgeActive}
+                                onChange={(e) => setIsSurgeActive(e.target.checked)}
+                                className="sr-only peer"
+                            />
+                            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500"></div>
+                        </label>
+                    </div>
+
+                    {isSurgeActive && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                            <div className="space-y-2">
+                                <label className="block text-sm font-semibold text-slate-900">Surge Fee (Flat)</label>
+                                <div className="relative">
+                                    <input
+                                        type="number"
+                                        value={surgeFee}
+                                        onChange={(e) => setSurgeFee(e.target.value)}
+                                        className="w-full px-4 py-2 rounded-xl border border-orange-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all font-medium bg-white"
+                                        placeholder="20"
+                                    />
+                                    <div className="absolute right-4 top-2 text-slate-500 font-medium">₹</div>
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <label className="block text-sm font-semibold text-slate-900">Surge Reason</label>
+                                <input
+                                    type="text"
+                                    value={surgeReason}
+                                    onChange={(e) => setSurgeReason(e.target.value)}
+                                    className="w-full px-4 py-2 rounded-xl border border-orange-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all font-medium bg-white"
+                                    placeholder="e.g. High Demand"
+                                />
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 <div className="space-y-2">

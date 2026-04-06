@@ -10,9 +10,9 @@ import DashboardFilters from '@/components/DashboardFilters';
 export default async function DashboardPage({
     searchParams,
 }: {
-    searchParams: Promise<{ startDate?: string; endDate?: string }>;
+    searchParams: Promise<{ startDate?: string; endDate?: string; cityId?: string }>;
 }) {
-    const { startDate: qStart, endDate: qEnd } = await searchParams;
+    const { startDate: qStart, endDate: qEnd, cityId: qCityId } = await searchParams;
     const supabase = await createClient();
 
     const {
@@ -37,24 +37,26 @@ export default async function DashboardPage({
 
     const startDate = qStart || today;
     const endDate = qEnd || today;
+    const cityId = qCityId || null;
 
-    // Helper to apply date filters
-    const applyDateFilter = (query: any) => {
-        if (startDate) {
-            query = query.gte('created_at', `${startDate}T00:00:00Z`);
+    // Helper to apply date and city filters
+    const applyFilters = (query: any, { dateFilter = true, cityField = 'city_id' }: { dateFilter?: boolean; cityField?: string } = {}) => {
+        if (dateFilter) {
+            if (startDate) query = query.gte('created_at', `${startDate}T00:00:00Z`);
+            if (endDate) query = query.lte('created_at', `${endDate}T23:59:59Z`);
         }
-        if (endDate) {
-            query = query.lte('created_at', `${endDate}T23:59:59Z`);
-        }
+        if (cityId) query = query.eq(cityField, cityId);
         return query;
     };
 
     // Fetch dashboard data
     const [deliveredOrdersResult, pendingOrdersResult, customersResult, restaurantsResult] = await Promise.all([
-        applyDateFilter(supabase.from('orders').select('*', { count: 'exact', head: true }).eq('status', 'delivered')),
-        applyDateFilter(supabase.from('orders').select('*', { count: 'exact', head: true }).in('status', ['pending', 'accepted', 'preparing', 'ready', 'assigned', 'picked_up', 'on_the_way'])),
-        supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'customer'),
-        supabase.from('restaurants').select('*', { count: 'exact', head: true }),
+        applyFilters(supabase.from('orders').select('*', { count: 'exact', head: true }).eq('status', 'delivered')),
+        applyFilters(supabase.from('orders').select('*', { count: 'exact', head: true }).in('status', ['pending', 'accepted', 'preparing', 'ready', 'assigned', 'picked_up', 'on_the_way'])),
+        applyFilters(supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'customer'), { cityField: 'city_id' }),
+        cityId
+            ? supabase.from('restaurants').select('*', { count: 'exact', head: true }).eq('city_id', cityId)
+            : supabase.from('restaurants').select('*', { count: 'exact', head: true }),
     ]);
 
     // Get total revenue from delivered orders
@@ -63,7 +65,7 @@ export default async function DashboardPage({
         .select('total')
         .eq('status', 'delivered');
 
-    revenueQuery = applyDateFilter(revenueQuery);
+    revenueQuery = applyFilters(revenueQuery);
 
     const { data: revenueData } = await revenueQuery;
 

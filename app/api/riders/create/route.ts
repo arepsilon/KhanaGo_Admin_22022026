@@ -21,7 +21,7 @@ function generatePassword() {
 
 export async function POST(request: NextRequest) {
     try {
-        const { full_name, phone } = await request.json();
+        const { full_name, phone, city_id } = await request.json();
 
         if (!full_name) {
             return NextResponse.json({ error: 'Full name is required' }, { status: 400 });
@@ -53,6 +53,7 @@ export async function POST(request: NextRequest) {
                 email: email,
                 phone: phone || null,
                 role: 'rider',
+                city_id: city_id || null,
             });
 
         if (profileError) {

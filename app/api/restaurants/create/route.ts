@@ -23,6 +23,8 @@ export async function POST(request: Request) {
             admin_opening_time,
             admin_closing_time,
             preparation_time,
+            city_id,
+            serviceable_radius_km,
         } = body;
 
         // Validations
@@ -101,7 +103,9 @@ export async function POST(request: Request) {
                 show_menu_images: show_menu_images !== undefined ? show_menu_images : true,
                 admin_opening_time: admin_opening_time || '09:00',
                 admin_closing_time: admin_closing_time || '22:00',
-                preparation_time: preparation_time || 30
+                preparation_time: preparation_time || 30,
+                city_id: city_id || null,
+                serviceable_radius_km: serviceable_radius_km !== undefined ? serviceable_radius_km : 5.0
             })
             .select()
             .single();

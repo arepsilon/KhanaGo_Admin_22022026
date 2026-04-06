@@ -18,6 +18,7 @@ type NotificationRule = {
     body_template: string;
     cooldown_hours: number;
     custom_query: string | null;
+    city_id: string | null;
     created_at: string;
     updated_at: string;
 };
@@ -58,6 +59,8 @@ export default function NotificationRulesTable() {
     const [logLoading, setLogLoading] = useState(false);
     const [sendingRuleId, setSendingRuleId] = useState<string | null>(null);
     const [sendResult, setSendResult] = useState<{ ruleId: string; count: number; error?: string } | null>(null);
+    const [cities, setCities] = useState<any[]>([]);
+    const [selectedCityFilter, setSelectedCityFilter] = useState('all');
 
     // Form state
     const [formData, setFormData] = useState({
@@ -69,17 +72,24 @@ export default function NotificationRulesTable() {
         cooldown_hours: 24,
         custom_query: '',
         is_active: true,
+        city_id: '',
     });
 
     useEffect(() => {
         fetchRules();
+        fetchCities();
     }, []);
+
+    const fetchCities = async () => {
+        const { data } = await supabase.from('cities').select('id, name').eq('is_active', true).order('name');
+        if (data) setCities(data);
+    };
 
     const fetchRules = async () => {
         setLoading(true);
         const { data, error } = await supabase
             .from('notification_rules')
-            .select('*')
+            .select('*, city:cities(id, name)')
             .order('created_at', { ascending: false });
 
         if (error) {
@@ -306,6 +316,7 @@ export default function NotificationRulesTable() {
             cooldown_hours: formData.cooldown_hours,
             custom_query: formData.rule_type === 'custom_sql' ? formData.custom_query : null,
             is_active: formData.is_active,
+            city_id: formData.city_id || null,
         };
 
         try {
@@ -357,6 +368,7 @@ export default function NotificationRulesTable() {
             cooldown_hours: rule.cooldown_hours,
             custom_query: rule.custom_query || '',
             is_active: rule.is_active,
+            city_id: rule.city_id || '',
         });
         setShowAddModal(true);
     };
@@ -371,6 +383,7 @@ export default function NotificationRulesTable() {
             cooldown_hours: 24,
             custom_query: '',
             is_active: true,
+            city_id: '',
         });
     };
 
@@ -401,12 +414,24 @@ export default function NotificationRulesTable() {
                     <h1 className="text-2xl font-bold text-gray-900">Notification Rules</h1>
                     <p className="text-black mt-1 text-sm">Send targeted push notifications to customers</p>
                 </div>
-                <button
-                    onClick={() => { resetForm(); setEditingRule(null); setShowAddModal(true); }}
-                    className="bg-orange-600 hover:bg-orange-700 text-white px-5 py-2.5 rounded-lg shadow-sm font-medium transition-colors flex items-center gap-2"
-                >
-                    <Plus className="w-5 h-5" /> Add Rule
-                </button>
+                <div className="flex items-center gap-4">
+                    <select
+                        value={selectedCityFilter}
+                        onChange={e => setSelectedCityFilter(e.target.value)}
+                        className="bg-white border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 max-w-[200px]"
+                    >
+                        <option value="all">Global / All Cities</option>
+                        {cities.map(c => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                    </select>
+                    <button
+                        onClick={() => { resetForm(); setEditingRule(null); setShowAddModal(true); }}
+                        className="bg-orange-600 hover:bg-orange-700 text-white px-5 py-2.5 rounded-lg shadow-sm font-medium transition-colors flex items-center gap-2"
+                    >
+                        <Plus className="w-5 h-5" /> Add Rule
+                    </button>
+                </div>
             </div>
 
             {/* Rules List */}
@@ -424,7 +449,7 @@ export default function NotificationRulesTable() {
                 </div>
             ) : (
                 <div className="space-y-4">
-                    {rules.map(rule => (
+                    {(selectedCityFilter === 'all' ? rules : rules.filter(r => r.city_id === selectedCityFilter)).map(rule => (
                         <div key={rule.id} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
                             {/* Rule Header */}
                             <div className="p-5">
@@ -434,6 +459,9 @@ export default function NotificationRulesTable() {
                                             <h3 className="text-lg font-bold text-slate-800 truncate">{rule.name}</h3>
                                             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700 whitespace-nowrap">
                                                 {RULE_TYPE_LABELS[rule.rule_type] || rule.rule_type}
+                                            </span>
+                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${(rule as any).city ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                                                {(rule as any).city ? (rule as any).city.name : 'Global'}
                                             </span>
                                         </div>
                                         <p className="text-sm text-black">{rule.description || RULE_TYPE_DESCRIPTIONS[rule.rule_type]}</p>
@@ -609,6 +637,21 @@ export default function NotificationRulesTable() {
                                     ))}
                                 </select>
                                 <p className="text-xs text-black mt-1">{RULE_TYPE_DESCRIPTIONS[formData.rule_type]}</p>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium mb-1 text-black">Target City (Optional)</label>
+                                <select
+                                    value={formData.city_id}
+                                    onChange={(e) => setFormData({ ...formData, city_id: e.target.value })}
+                                    className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500 bg-white"
+                                >
+                                    <option value="">Global (All Cities)</option>
+                                    {cities.map(c => (
+                                        <option key={c.id} value={c.id}>{c.name}</option>
+                                    ))}
+                                </select>
+                                <p className="text-xs text-black mt-1">Leave empty to target users across all cities.</p>
                             </div>
 
                             {formData.rule_type === 'custom_sql' && (

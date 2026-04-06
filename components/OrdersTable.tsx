@@ -15,7 +15,15 @@ export default function OrdersTable() {
     const [showAssignModal, setShowAssignModal] = useState<string | null>(null);
     const [retryingOrder, setRetryingOrder] = useState<string | null>(null);
     const [editingOrder, setEditingOrder] = useState<any>(null);
+    const [cities, setCities] = useState<{ id: string; name: string }[]>([]);
+    const [cityFilter, setCityFilter] = useState<string>('all');
     const supabase = createClient();
+
+    useEffect(() => {
+        supabase.from('cities').select('id, name').eq('is_active', true).order('name').then(({ data }) => {
+            setCities(data || []);
+        });
+    }, []);
 
     useEffect(() => {
         fetchOrders();
@@ -51,7 +59,7 @@ export default function OrdersTable() {
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [filter]);
+    }, [filter, cityFilter]);
 
     const fetchOrders = async () => {
         let query = supabase
@@ -72,6 +80,10 @@ export default function OrdersTable() {
             `)
             .order('created_at', { ascending: false });
 
+        if (cityFilter !== 'all') {
+            query = query.eq('city_id', cityFilter);
+        }
+
         if (filter === 'awaiting_rider') {
             // Special filter for orders awaiting rider assignment
             query = query
@@ -81,7 +93,7 @@ export default function OrdersTable() {
             query = query.eq('status', filter);
         }
 
-        const { data, error } = await query;
+        const { data, error } = await query.limit(150);
 
         if (error) {
             console.error('Error fetching orders:', error);
@@ -239,7 +251,19 @@ export default function OrdersTable() {
             {/* Filters */}
             <div className="bg-white rounded-xl shadow-sm p-4 mb-6">
                 <div className="flex justify-between items-center mb-4">
-                    <h3 className="font-semibold text-gray-700">Filter by Status</h3>
+                    <div className="flex items-center gap-3">
+                        <h3 className="font-semibold text-gray-700">Filter by Status</h3>
+                        <select
+                            value={cityFilter}
+                            onChange={(e) => setCityFilter(e.target.value)}
+                            className="px-4 py-2 rounded-lg text-sm font-medium bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-orange-400 transition-colors shadow-sm"
+                        >
+                            <option value="all">All Cities</option>
+                            {cities.map((city) => (
+                                <option key={city.id} value={city.id}>{city.name}</option>
+                            ))}
+                        </select>
+                    </div>
                     <button
                         onClick={expandedOrders.size === 0 ? expandAll : collapseAll}
                         className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-colors"

@@ -16,6 +16,8 @@ export default function RestaurantMenuModal({ isOpen, onClose, restaurantId, res
     const [categories, setCategories] = useState<any[]>([]);
     const [activeTab, setActiveTab] = useState<'list' | 'add'>('list');
     const [editingId, setEditingId] = useState<string | null>(null);
+    const [restaurantSettings, setRestaurantSettings] = useState<any>(null);
+    const [globalSettings, setGlobalSettings] = useState<any>(null);
 
     // Form State
     const [formData, setFormData] = useState({
@@ -47,9 +49,28 @@ export default function RestaurantMenuModal({ isOpen, onClose, restaurantId, res
     const fetchMenuData = async () => {
         setLoading(true);
 
-        // Fetch Categories
-        const { data: catData } = await supabase.from('categories').select('*').order('name');
-        setCategories(catData || []);
+        // Fetch Restaurant Settings
+        const { data: restData } = await supabase
+            .from('restaurants')
+            .select('commission_percent, transaction_charge_percent, platform_fee_per_order, city_id')
+            .eq('id', restaurantId)
+            .single();
+        
+        setRestaurantSettings(restData);
+
+        // Fetch Global Settings for the restaurant's city (or true global)
+        const cityId = restData?.city_id;
+        let settingsQuery = supabase.from('app_settings').select('key, value');
+        if (cityId) {
+            settingsQuery = settingsQuery.eq('city_id', cityId);
+        } else {
+            settingsQuery = settingsQuery.is('city_id', null);
+        }
+        
+        const { data: globalData } = await settingsQuery;
+        const settingsMap: Record<string, any> = {};
+        globalData?.forEach(s => settingsMap[s.key] = s.value);
+        setGlobalSettings(settingsMap);
 
         // Fetch Items
         const { data: itemData } = await supabase
@@ -60,6 +81,21 @@ export default function RestaurantMenuModal({ isOpen, onClose, restaurantId, res
 
         setItems(itemData || []);
         setLoading(false);
+    };
+
+    const calculateCustomerPrice = (basePrice: number) => {
+        if (!basePrice) return 0;
+        
+        const commission = restaurantSettings?.commission_percent ?? Number(globalSettings?.commission_percent ?? 15);
+        const txCharge = restaurantSettings?.transaction_charge_percent ?? Number(globalSettings?.transaction_fee_percent ?? 2.5);
+
+        // Price = Base + Base*Comm% + Base*Tx% (matches Customer App Menu)
+        const priceWithFees = basePrice + (basePrice * (commission / 100)) + (basePrice * (txCharge / 100));
+        return Math.round(priceWithFees);
+    };
+
+    const getActivePlatformFee = () => {
+        return restaurantSettings?.platform_fee_per_order ?? Number(globalSettings?.platform_fee ?? 5);
     };
 
     const handleImageUpload = async (file: File): Promise<string | null> => {
@@ -147,7 +183,7 @@ export default function RestaurantMenuModal({ isOpen, onClose, restaurantId, res
                 restaurant_id: restaurantId,
                 name: formData.name,
                 description: formData.description,
-                price: parseFloat(formData.price),
+                base_price: parseFloat(formData.price),
                 category_id: formData.category_id || null,
                 is_vegetarian: formData.is_vegetarian,
                 is_vegan: formData.is_vegan,
@@ -190,7 +226,7 @@ export default function RestaurantMenuModal({ isOpen, onClose, restaurantId, res
         setFormData({
             name: item.name,
             description: item.description || '',
-            price: item.price.toString(),
+            price: (item.base_price ?? item.price).toString(),
             category_id: item.category_id || '',
             is_vegetarian: item.is_vegetarian,
             is_vegan: item.is_vegan,
@@ -293,7 +329,15 @@ export default function RestaurantMenuModal({ isOpen, onClose, restaurantId, res
                                         </div>
                                         <p className="text-sm text-gray-500 line-clamp-2 mb-2">{item.description}</p>
                                         <div className="flex justify-between items-center mt-auto">
-                                            <span className="font-bold text-orange-600">₹{item.price}</span>
+                                            <div>
+                                                <span className="font-bold text-orange-600">₹{item.base_price ?? item.price}</span>
+                                                <span className="text-xs text-gray-400 ml-1">
+                                                    (customer: ₹{calculateCustomerPrice(item.base_price ?? item.price)})
+                                                </span>
+                                                <div className="text-[10px] text-gray-400 mt-0.5">
+                                                    + ₹{getActivePlatformFee()} platform fee per order
+                                                </div>
+                                            </div>
                                             <span className="text-xs px-2 py-1 bg-gray-100 rounded-full text-black">
                                                 {item.categories?.name || 'Uncategorized'}
                                             </span>
@@ -366,7 +410,7 @@ export default function RestaurantMenuModal({ isOpen, onClose, restaurantId, res
                                     </div>
 
                                     <div>
-                                        <label className="block text-sm font-semibold text-black mb-1">Price (₹)</label>
+                                        <label className="block text-sm font-semibold text-black mb-1">Restaurant Price (₹) <span className="text-gray-400 font-normal text-xs">— customer sees this + commission</span></label>
                                         <input
                                             required type="number" step="0.01"
                                             className="w-full p-2 border rounded-lg text-black focus:ring-2 focus:ring-orange-500 focus:outline-none"

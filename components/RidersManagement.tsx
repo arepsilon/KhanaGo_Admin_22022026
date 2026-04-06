@@ -7,10 +7,12 @@ import { Plus, X, CheckCircle, AlertTriangle, AlertCircle } from 'lucide-react';
 export default function RidersManagement() {
     const [riders, setRiders] = useState<any[]>([]);
     const [showAddModal, setShowAddModal] = useState(false);
-    const [formData, setFormData] = useState({ full_name: '', phone: '' });
+    const [formData, setFormData] = useState({ full_name: '', phone: '', city_id: '' });
     const [loading, setLoading] = useState(false);
     const [createdRider, setCreatedRider] = useState<any>(null);
     const supabase = createClient();
+    const [cities, setCities] = useState<any[]>([]);
+    const [cityFilter, setCityFilter] = useState<string>('all');
 
     // Reset Password State
     const [resetRiderId, setResetRiderId] = useState<string | null>(null);
@@ -28,12 +30,18 @@ export default function RidersManagement() {
 
     useEffect(() => {
         fetchRiders();
+        supabase
+            .from('cities')
+            .select('id, name')
+            .eq('is_active', true)
+            .order('name')
+            .then(({ data }) => setCities(data || []));
     }, []);
 
     const fetchRiders = async () => {
         const { data } = await supabase
             .from('profiles')
-            .select('*')
+            .select('*, city:cities(id, name)')
             .eq('role', 'rider')
             .order('created_at', { ascending: false });
 
@@ -190,7 +198,7 @@ export default function RidersManagement() {
 
             if (data.success) {
                 setCreatedRider(data.rider);
-                setFormData({ full_name: '', phone: '' });
+                setFormData({ full_name: '', phone: '', city_id: '' });
                 fetchRiders();
             } else {
                 alert('Error: ' + data.error);
@@ -209,12 +217,24 @@ export default function RidersManagement() {
                     <h1 className="text-2xl font-bold text-gray-900">Riders Management</h1>
                     <p className="text-gray-500 mt-1 text-sm">Manage delivery riders</p>
                 </div>
-                <button
-                    onClick={() => setShowAddModal(true)}
-                    className="bg-orange-600 hover:bg-orange-700 text-white px-5 py-2.5 rounded-lg shadow-sm font-medium transition-colors flex items-center gap-2"
-                >
-                    <Plus className="w-5 h-5" /> Add Rider
-                </button>
+                <div className="flex items-center gap-3">
+                    <select
+                        value={cityFilter}
+                        onChange={(e) => setCityFilter(e.target.value)}
+                        className="px-4 py-2.5 rounded-lg text-sm font-medium bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-orange-400 transition-colors shadow-sm"
+                    >
+                        <option value="all">All Cities</option>
+                        {cities.map((city) => (
+                            <option key={city.id} value={city.id}>{city.name}</option>
+                        ))}
+                    </select>
+                    <button
+                        onClick={() => setShowAddModal(true)}
+                        className="bg-orange-600 hover:bg-orange-700 text-white px-5 py-2.5 rounded-lg shadow-sm font-medium transition-colors flex items-center gap-2"
+                    >
+                        <Plus className="w-5 h-5" /> Add Rider
+                    </button>
+                </div>
             </div>
 
             {/* Riders Table */}
@@ -227,12 +247,13 @@ export default function RidersManagement() {
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Login ID</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Username (Email)</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Phone</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">City</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
-                        {riders.map((rider) => (
+                        {riders.filter(r => cityFilter === 'all' || r.city_id === cityFilter).map((rider) => (
                             <tr key={rider.id} className="hover:bg-gray-50">
                                 <td className="px-6 py-4 whitespace-nowrap">
                                     <div className="font-medium text-gray-900">{rider.full_name}</div>
@@ -257,6 +278,29 @@ export default function RidersManagement() {
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                     {rider.phone || 'N/A'}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                    <select
+                                        value={rider.city_id || ''}
+                                        onChange={async (e) => {
+                                            const newCityId = e.target.value || null;
+                                            const { error } = await supabase
+                                                .from('profiles')
+                                                .update({ city_id: newCityId })
+                                                .eq('id', rider.id);
+                                            if (error) {
+                                                alert('Error updating city: ' + error.message);
+                                            } else {
+                                                fetchRiders();
+                                            }
+                                        }}
+                                        className="px-2 py-1 text-xs border border-gray-200 rounded bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-orange-400"
+                                    >
+                                        <option value="">Not assigned</option>
+                                        {cities.map((city) => (
+                                            <option key={city.id} value={city.id}>{city.name}</option>
+                                        ))}
+                                    </select>
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap">
                                     <div className="flex flex-col gap-1">
@@ -304,7 +348,7 @@ export default function RidersManagement() {
                         ))}
                     </tbody>
                 </table>
-                {riders.length === 0 && (
+                {riders.filter(r => cityFilter === 'all' || r.city_id === cityFilter).length === 0 && (
                     <div className="text-center py-12 text-gray-500">
                         No riders yet. Click "+ Add Rider" to create one.
                     </div>
@@ -444,6 +488,23 @@ export default function RidersManagement() {
                                         className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500"
                                         placeholder="Enter phone number"
                                     />
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium mb-2">
+                                        City <span className="text-red-500">*</span>
+                                    </label>
+                                    <select
+                                        required
+                                        value={formData.city_id}
+                                        onChange={(e) => setFormData({ ...formData, city_id: e.target.value })}
+                                        className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500 bg-white"
+                                    >
+                                        <option value="">Select a city</option>
+                                        {cities.map((city) => (
+                                            <option key={city.id} value={city.id}>{city.name}</option>
+                                        ))}
+                                    </select>
                                 </div>
 
                                 <div className="p-4 bg-blue-50 rounded-lg">

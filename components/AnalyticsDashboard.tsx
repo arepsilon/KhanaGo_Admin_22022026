@@ -4,7 +4,15 @@ import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import DateRangePicker from './DateRangePicker';
 
-export default function AnalyticsDashboard() {
+export default function AnalyticsDashboard({ 
+    startDate, 
+    endDate, 
+    cityId 
+}: { 
+    startDate: string; 
+    endDate: string; 
+    cityId: string | null; 
+}) {
     const [analytics, setAnalytics] = useState<any>({
         totalRevenue: 0,
         totalOrders: 0,
@@ -19,17 +27,18 @@ export default function AnalyticsDashboard() {
             deliveryFees: 0,
             customerPlatformFees: 0,
             total: 0
-        }
+        },
+        avgPrepTime: 0,
+        avgTransitTime: 0,
+        paymentMethods: []
     });
 
     const [loading, setLoading] = useState(true);
-    const [startDate, setStartDate] = useState('');
-    const [endDate, setEndDate] = useState('');
     const supabase = createClient();
 
     useEffect(() => {
         fetchAnalytics();
-    }, [startDate, endDate]);
+    }, [startDate, endDate, cityId]);
 
     const fetchAnalytics = async () => {
         try {
@@ -52,14 +61,23 @@ export default function AnalyticsDashboard() {
             if (endDate) {
                 query = query.lte('created_at', `${endDate}T23:59:59Z`);
             }
+            if (cityId) {
+                query = query.eq('city_id', cityId);
+            }
 
             const { data: orders } = await query;
 
             // Fetch customers count
-            const { count: customersCount } = await supabase
+            let customersQuery = supabase
                 .from('profiles')
                 .select('*', { count: 'exact', head: true })
                 .eq('role', 'customer');
+            
+            if (cityId) {
+                customersQuery = customersQuery.eq('city_id', cityId);
+            }
+            
+            const { count: customersCount } = await customersQuery;
 
             console.log('Analytics: Fetched orders:', orders?.length, 'orders');
             console.log('Analytics: Sample order:', orders?.[0]);
@@ -135,6 +153,41 @@ export default function AnalyticsDashboard() {
                     .sort((a: any, b: any) => b.revenue - a.revenue)
                     .slice(0, 5);
 
+                // Operational Insights: Calculate average prep time and transit time
+                let totalPrepTimeMs = 0;
+                let validPrepOrders = 0;
+                let totalTransitTimeMs = 0;
+                let validTransitOrders = 0;
+
+                completedOrders.forEach(order => {
+                    if (order.accepted_at && order.prepared_at) {
+                        totalPrepTimeMs += new Date(order.prepared_at).getTime() - new Date(order.accepted_at).getTime();
+                        validPrepOrders++;
+                    }
+                    if (order.picked_up && order.delivered_at) {
+                        totalTransitTimeMs += new Date(order.delivered_at).getTime() - new Date(order.picked_up).getTime();
+                        validTransitOrders++;
+                    }
+                });
+
+                const avgPrepTimeMin = validPrepOrders > 0 ? (totalPrepTimeMs / validPrepOrders) / 60000 : 0;
+                const avgTransitTimeMin = validTransitOrders > 0 ? (totalTransitTimeMs / validTransitOrders) / 60000 : 0;
+
+                // Payment Methods Insight
+                const paymentMethodsCounter = orders.reduce((acc: any, order) => {
+                    const method = order.payment_method || 'unknown';
+                    acc[method] = (acc[method] || 0) + 1;
+                    return acc;
+                }, {});
+
+                const totalPaymentMethods = Object.values(paymentMethodsCounter).reduce((sum: any, count: any) => sum + count, 0) as number;
+
+                const paymentMethods = Object.entries(paymentMethodsCounter).map(([method, count]) => ({
+                    method,
+                    count,
+                    percentage: totalPaymentMethods > 0 ? ((count as number) / totalPaymentMethods) * 100 : 0
+                }));
+
                 setAnalytics({
                     totalRevenue,
                     totalOrders,
@@ -145,7 +198,10 @@ export default function AnalyticsDashboard() {
                         count
                     })),
                     topRestaurants,
-                    adminEarnings
+                    adminEarnings,
+                    avgPrepTime: avgPrepTimeMin,
+                    avgTransitTime: avgTransitTimeMin,
+                    paymentMethods
                 });
             }
         } catch (error) {
@@ -168,13 +224,7 @@ export default function AnalyticsDashboard() {
 
     return (
         <div className="space-y-8">
-            <DateRangePicker
-                startDate={startDate}
-                endDate={endDate}
-                onStartChange={setStartDate}
-                onEndChange={setEndDate}
-                label="Analytics Period"
-            />
+            {/* DateRange and CityId changes are now managed by parent page via DashboardFilters */}
 
             {/* Admin Earnings Section */}
             <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-xl shadow-lg p-6 text-white">
@@ -239,6 +289,58 @@ export default function AnalyticsDashboard() {
                     <p className="text-sm font-medium text-slate-600 mb-2">Total Customers</p>
                     <p className="text-3xl font-bold text-slate-900">{analytics.totalCustomers}</p>
                     <p className="text-xs text-slate-500 mt-2">Registered users</p>
+                </div>
+            </div>
+
+            {/* Operational & Payment Insights */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-lg shadow-sm border border-indigo-100 p-6">
+                    <div className="flex items-center justify-between mb-4">
+                        <p className="text-sm font-semibold text-indigo-900">Avg Prep Time</p>
+                        <span className="text-indigo-500">⏱️</span>
+                    </div>
+                    <p className="text-3xl font-bold text-indigo-700">{Math.round(analytics.avgPrepTime)} <span className="text-lg font-normal">mins</span></p>
+                    <p className="text-xs text-indigo-600/70 mt-2">From accepted to prepared</p>
+                </div>
+
+                <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-lg shadow-sm border border-indigo-100 p-6">
+                    <div className="flex items-center justify-between mb-4">
+                        <p className="text-sm font-semibold text-indigo-900">Avg Transit Time</p>
+                        <span className="text-indigo-500">🛵</span>
+                    </div>
+                    <p className="text-3xl font-bold text-indigo-700">{Math.round(analytics.avgTransitTime)} <span className="text-lg font-normal">mins</span></p>
+                    <p className="text-xs text-indigo-600/70 mt-2">From picked up to delivery</p>
+                </div>
+
+                <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6 col-span-1 md:col-span-2">
+                    <h3 className="text-sm font-semibold text-slate-900 mb-4 flex items-center gap-2">
+                        <span>💳</span> Payment Method Preferences
+                    </h3>
+                    <div className="flex h-4 w-full bg-slate-100 rounded-full overflow-hidden mb-4">
+                        {analytics.paymentMethods.map((pm: any, idx: number) => {
+                            const colors = ['bg-emerald-500', 'bg-blue-500', 'bg-purple-500', 'bg-amber-500'];
+                            return (
+                                <div
+                                    key={pm.method}
+                                    style={{ width: `${pm.percentage}%` }}
+                                    className={`${colors[idx % colors.length]} h-full transition-all`}
+                                    title={`${pm.method} - ${Math.round(pm.percentage)}%`}
+                                />
+                            );
+                        })}
+                    </div>
+                    <div className="flex gap-4 flex-wrap">
+                        {analytics.paymentMethods.map((pm: any, idx: number) => {
+                            const dots = ['text-emerald-500', 'text-blue-500', 'text-purple-500', 'text-amber-500'];
+                            return (
+                                <div key={pm.method} className="flex items-center gap-1.5 text-sm">
+                                    <span className={dots[idx % dots.length]}>●</span>
+                                    <span className="capitalize text-slate-700 font-medium">{pm.method}</span>
+                                    <span className="text-slate-500">({Math.round(pm.percentage)}%)</span>
+                                </div>
+                            );
+                        })}
+                    </div>
                 </div>
             </div>
 

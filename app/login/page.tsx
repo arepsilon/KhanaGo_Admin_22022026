@@ -13,12 +13,18 @@ export default function LoginPage() {
     const router = useRouter();
     const supabase = createClient();
 
+    const ALLOWED_ADMIN_EMAIL = '9867109138@khanago.admin';
+
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
         setError('');
 
         try {
+            if (email !== ALLOWED_ADMIN_EMAIL) {
+                throw new Error('Admin access required');
+            }
+
             const { error: authError } = await supabase.auth.signInWithPassword({
                 email,
                 password,

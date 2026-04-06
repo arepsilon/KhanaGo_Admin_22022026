@@ -11,6 +11,8 @@ export default function AdsManager() {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
+    const [cities, setCities] = useState<any[]>([]);
+    const [selectedCityFilter, setSelectedCityFilter] = useState('all');
 
     const supabase = createClient();
 
@@ -19,7 +21,8 @@ export default function AdsManager() {
     const [adCategory, setAdCategory] = useState<'restaurant' | 'grocery'>('restaurant');
     const [imageFile, setImageFile] = useState<File | null>(null);
     const [selectedRestaurant, setSelectedRestaurant] = useState('');
-    const [linkTarget, setLinkTarget] = useState(''); // New state
+    const [linkTarget, setLinkTarget] = useState('');
+    const [selectedCityId, setSelectedCityId] = useState<string>('');
 
     // Integrated Coupon State
     const [includeCoupon, setIncludeCoupon] = useState(false);
@@ -32,7 +35,13 @@ export default function AdsManager() {
     useEffect(() => {
         fetchAds();
         fetchRestaurants(); // Fetch restaurants
+        fetchCities(); // Fetch cities
     }, []);
+
+    const fetchCities = async () => {
+        const { data } = await supabase.from('cities').select('id, name').eq('is_active', true).order('name');
+        if (data) setCities(data);
+    };
 
     const fetchRestaurants = async () => {
         const { data, error } = await supabase.from('restaurants').select('id, name');
@@ -40,10 +49,10 @@ export default function AdsManager() {
     };
 
     const fetchAds = async () => {
-        // Fetch ads joined with coupon details (if any)
+        // Fetch ads joined with coupon details (if any) and city details
         const { data, error } = await supabase
             .from('ads')
-            .select('*, coupon_code, coupons(*)')
+            .select('*, city:cities(id, name), coupon_code, coupons(*)')
             .order('created_at', { ascending: false });
 
         if (error) console.error(error);
@@ -58,6 +67,7 @@ export default function AdsManager() {
         setImageFile(null);
         setSelectedRestaurant(ad.restaurant_id || '');
         setLinkTarget(ad.link_target || '');
+        setSelectedCityId(ad.city_id || '');
 
         // Pre-fill coupon data if exists
         if (ad.coupons) {
@@ -90,6 +100,7 @@ export default function AdsManager() {
         setLinkTarget('');
         setImageFile(null);
         setEditingId(null);
+        setSelectedCityId('');
         setIsModalOpen(false);
         setIncludeCoupon(false);
         resetCouponForm();
@@ -137,7 +148,8 @@ export default function AdsManager() {
                     discount_value: parseFloat(discountValue),
                     min_order_value: minOrderValue ? parseFloat(minOrderValue) : 0,
                     max_discount_value: maxDiscountValue ? parseFloat(maxDiscountValue) : null,
-                    is_active: true
+                    is_active: true,
+                    city_id: selectedCityId || null
                 };
 
                 const { error: couponError } = await supabase
@@ -155,7 +167,8 @@ export default function AdsManager() {
                 image_url: imageUrl,
                 restaurant_id: adCategory === 'restaurant' ? (selectedRestaurant || null) : null,
                 link_target: adCategory === 'grocery' ? (linkTarget || null) : null,
-                coupon_code: finalCouponCode
+                coupon_code: finalCouponCode,
+                city_id: selectedCityId || null
             };
 
             const { error: dbError } = editingId
@@ -191,23 +204,39 @@ export default function AdsManager() {
         }
     };
 
+    const filteredAds = selectedCityFilter === 'all'
+        ? ads
+        : ads.filter(ad => ad.city_id === selectedCityFilter);
+
     if (loading) return <div className="p-8 text-center text-gray-500">Loading Promotions...</div>;
 
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
                 <h2 className="text-xl font-bold">Active Promotions</h2>
-                <button
-                    onClick={() => { resetForms(); setIsModalOpen(true); }}
-                    className="flex items-center gap-2 bg-orange-500 text-white px-4 py-2 rounded-lg hover:bg-orange-600 font-medium"
-                >
-                    <Plus size={20} />
-                    New Promo
-                </button>
+                <div className="flex items-center gap-4">
+                    <select
+                        value={selectedCityFilter}
+                        onChange={e => setSelectedCityFilter(e.target.value)}
+                        className="bg-white border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 max-w-[200px]"
+                    >
+                        <option value="all">Global / All Cities</option>
+                        {cities.map(c => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                    </select>
+                    <button
+                        onClick={() => { resetForms(); setIsModalOpen(true); }}
+                        className="flex items-center gap-2 bg-orange-500 text-white px-4 py-2 rounded-lg hover:bg-orange-600 font-medium"
+                    >
+                        <Plus size={20} />
+                        New Promo
+                    </button>
+                </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {ads.map(ad => (
+                {filteredAds.map(ad => (
                     <div key={ad.id} className="bg-white rounded-xl overflow-hidden shadow-sm border border-gray-100 group">
                         <div className="h-48 relative">
                             <img src={ad.image_url} alt={ad.title} className="w-full h-full object-cover" />
@@ -236,8 +265,13 @@ export default function AdsManager() {
                         </div>
                         <div className="p-4">
                             <h3 className="font-bold text-gray-800">{ad.title}</h3>
+                            <div className="flex items-center gap-2 mt-1">
+                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${ad.city ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                                    {ad.city ? ad.city.name : 'Global / All Cities'}
+                                </span>
+                            </div>
                             {ad.coupons && (
-                                <div className="mt-2 flex items-center gap-2 text-sm text-green-600">
+                                <div className="mt-3 flex items-center gap-2 text-sm text-green-600">
                                     <Tag size={16} />
                                     <span className="font-medium">
                                         {ad.coupons.discount_type === 'percentage'
@@ -295,6 +329,21 @@ export default function AdsManager() {
                                         ))}
                                     </select>
                                     <p className="text-xs text-gray-500 mt-1">Clicking the ad will open this restaurant's page</p>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Target City</label>
+                                    <select
+                                        className="w-full p-2 border rounded-lg bg-white"
+                                        value={selectedCityId}
+                                        onChange={e => setSelectedCityId(e.target.value)}
+                                    >
+                                        <option value="">Global (All Cities)</option>
+                                        {cities.map(c => (
+                                            <option key={c.id} value={c.id}>{c.name}</option>
+                                        ))}
+                                    </select>
+                                    <p className="text-xs text-gray-500 mt-1">This promo will only appear for users in this city.</p>
                                 </div>
 
                                 <div>

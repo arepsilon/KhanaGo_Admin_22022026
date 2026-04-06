@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
 
 interface AddRestaurantModalProps {
@@ -12,6 +12,7 @@ interface AddRestaurantModalProps {
 export default function AddRestaurantModal({ isOpen, onClose, onSuccess }: AddRestaurantModalProps) {
     const [loading, setLoading] = useState(false);
     const [imageFile, setImageFile] = useState<File | null>(null);
+    const [cities, setCities] = useState<any[]>([]);
     const [formData, setFormData] = useState({
         name: '',
         description: '',
@@ -31,9 +32,23 @@ export default function AddRestaurantModal({ isOpen, onClose, onSuccess }: AddRe
         admin_opening_time: '09:00',
         admin_closing_time: '22:00',
         preparation_time: '30',
+        city_id: '',
+        serviceable_radius_km: '5.0',
     });
 
     const supabase = createClient();
+
+    useEffect(() => {
+        const fetchCities = async () => {
+            const { data } = await supabase
+                .from('cities')
+                .select('id, name')
+                .eq('is_active', true)
+                .order('name');
+            if (data) setCities(data);
+        };
+        fetchCities();
+    }, []);
 
     if (!isOpen) return null;
 
@@ -78,6 +93,8 @@ export default function AddRestaurantModal({ isOpen, onClose, onSuccess }: AddRe
                     badge_text: formData.badge_text || null,
                     show_menu_images: formData.show_menu_images,
                     preparation_time: parseInt(formData.preparation_time),
+                    city_id: formData.city_id || null,
+                    serviceable_radius_km: parseFloat(formData.serviceable_radius_km),
                 }),
             });
 
@@ -150,6 +167,20 @@ export default function AddRestaurantModal({ isOpen, onClose, onSuccess }: AddRe
                                     value={formData.badge_text}
                                     onChange={e => handleChange('badge_text', e.target.value)}
                                 />
+                            </div>
+                            <div className="col-span-2">
+                                <label className="block text-sm font-medium text-black mb-1">City</label>
+                                <select
+                                    required
+                                    className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all text-black bg-white"
+                                    value={formData.city_id}
+                                    onChange={e => handleChange('city_id', e.target.value)}
+                                >
+                                    <option value="">Select City</option>
+                                    {cities.map(city => (
+                                        <option key={city.id} value={city.id}>{city.name}</option>
+                                    ))}
+                                </select>
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-black mb-1">Opening Time (IST)</label>
@@ -258,6 +289,16 @@ export default function AddRestaurantModal({ isOpen, onClose, onSuccess }: AddRe
                     <div className="bg-green-50 p-6 rounded-xl border border-green-100">
                         <h3 className="text-lg font-semibold text-black mb-4 border-l-4 border-green-500 pl-3">Operations & Fees</h3>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div>
+                                <label className="block text-xs font-medium text-black mb-1">Serviceable Radius (km)</label>
+                                <input
+                                    type="number"
+                                    step="0.1"
+                                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all text-sm text-black"
+                                    value={formData.serviceable_radius_km}
+                                    onChange={e => handleChange('serviceable_radius_km', e.target.value)}
+                                />
+                            </div>
                             <div>
                                 <label className="block text-xs font-medium text-black mb-1">Delivery Fee (₹)</label>
                                 <input
