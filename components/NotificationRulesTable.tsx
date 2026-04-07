@@ -34,6 +34,7 @@ type NotificationLogEntry = {
 };
 
 const RULE_TYPE_LABELS: Record<string, string> = {
+    all_users: '📢 All Users',
     no_order_today: '📱 No Order Today',
     inactive_user: '😴 Lapsed Users',
     post_delivery: '⭐ Post-Delivery Feedback',
@@ -41,6 +42,7 @@ const RULE_TYPE_LABELS: Record<string, string> = {
 };
 
 const RULE_TYPE_DESCRIPTIONS: Record<string, string> = {
+    all_users: 'Send to all registered customers with push tokens',
     no_order_today: 'Users who logged in today but have not placed an order',
     inactive_user: 'Users who have not ordered in 7+ days',
     post_delivery: 'Users who received a delivery recently but haven\'t rated',
@@ -164,7 +166,17 @@ export default function NotificationRulesTable() {
             // 1. Find matching users based on rule type
             let targetUserIds: string[] = [];
 
-            if (rule.rule_type === 'no_order_today') {
+            if (rule.rule_type === 'all_users') {
+                // All users with customer push tokens
+                const { data: allTokens } = await supabase
+                    .from('push_tokens')
+                    .select('user_id')
+                    .eq('app_type', 'customer');
+
+                if (allTokens && allTokens.length > 0) {
+                    targetUserIds = [...new Set(allTokens.map(u => u.user_id))];
+                }
+            } else if (rule.rule_type === 'no_order_today') {
                 // Users with push tokens updated today but no orders today
                 const todayStart = new Date();
                 todayStart.setHours(0, 0, 0, 0);
