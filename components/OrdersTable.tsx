@@ -8,7 +8,7 @@ import EditOrderModal from './EditOrderModal';
 export default function OrdersTable() {
     const [orders, setOrders] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
-    const [filter, setFilter] = useState('all');
+    const [filter, setFilter] = useState<'all' | 'pending' | 'ready' | 'picked_up' | 'delivered' | 'cancelled'>('pending');
     const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
     const [onlineRiders, setOnlineRiders] = useState<any[]>([]);
     const [isAssigning, setIsAssigning] = useState(false);
@@ -17,7 +17,32 @@ export default function OrdersTable() {
     const [editingOrder, setEditingOrder] = useState<any>(null);
     const [cities, setCities] = useState<{ id: string; name: string }[]>([]);
     const [cityFilter, setCityFilter] = useState<string>('all');
+    const [dateFilter, setDateFilter] = useState<'today' | 'yesterday' | 'last7' | 'last30' | 'custom'>('today');
+    const [dateFrom, setDateFrom] = useState<string>('');
+    const [dateTo, setDateTo] = useState<string>('');
     const supabase = createClient();
+
+    const getDateRange = (): { from: string; to: string } | null => {
+        const now = new Date();
+        const startOfDay = (d: Date) => { d.setHours(0, 0, 0, 0); return d; };
+        const endOfDay = (d: Date) => { d.setHours(23, 59, 59, 999); return d; };
+
+        if (dateFilter === 'today') {
+            return { from: startOfDay(new Date()).toISOString(), to: endOfDay(new Date()).toISOString() };
+        } else if (dateFilter === 'yesterday') {
+            const y = new Date(); y.setDate(y.getDate() - 1);
+            return { from: startOfDay(y).toISOString(), to: endOfDay(new Date(y)).toISOString() };
+        } else if (dateFilter === 'last7') {
+            const d = new Date(); d.setDate(d.getDate() - 6);
+            return { from: startOfDay(d).toISOString(), to: endOfDay(now).toISOString() };
+        } else if (dateFilter === 'last30') {
+            const d = new Date(); d.setDate(d.getDate() - 29);
+            return { from: startOfDay(d).toISOString(), to: endOfDay(now).toISOString() };
+        } else if (dateFilter === 'custom' && dateFrom && dateTo) {
+            return { from: startOfDay(new Date(dateFrom)).toISOString(), to: endOfDay(new Date(dateTo)).toISOString() };
+        }
+        return null;
+    };
 
     useEffect(() => {
         supabase.from('cities').select('id, name').eq('is_active', true).order('name').then(({ data }) => {
@@ -59,7 +84,7 @@ export default function OrdersTable() {
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [filter, cityFilter]);
+    }, [filter, cityFilter, dateFilter, dateFrom, dateTo]);
 
     const fetchOrders = async () => {
         let query = supabase
@@ -84,13 +109,20 @@ export default function OrdersTable() {
             query = query.eq('city_id', cityFilter);
         }
 
-        if (filter === 'awaiting_rider') {
-            // Special filter for orders awaiting rider assignment
-            query = query
-                .in('status', ['accepted', 'preparing', 'ready'])
-                .not('rider_assignment_exhausted_at', 'is', null);
-        } else if (filter !== 'all') {
-            query = query.eq('status', filter);
+        const dateRange = getDateRange();
+        if (dateRange) {
+            query = query.gte('created_at', dateRange.from).lte('created_at', dateRange.to);
+        }
+
+        const filterStatuses: Record<string, string[]> = {
+            pending: ['pending', 'accepted', 'preparing'],
+            ready: ['ready', 'assigned'],
+            picked_up: ['picked_up'],
+            delivered: ['delivered'],
+            cancelled: ['cancelled', 'rejected'],
+        };
+        if (filter !== 'all') {
+            query = query.in('status', filterStatuses[filter]);
         }
 
         const { data, error } = await query.limit(150);
@@ -271,19 +303,68 @@ export default function OrdersTable() {
                         {expandedOrders.size === 0 ? '⬇️ Expand All' : '⬆️ Collapse All'}
                     </button>
                 </div>
-                <div className="flex gap-2 flex-wrap">
-                    {['all', 'awaiting_rider', 'pending', 'accepted', 'preparing', 'ready', 'on_the_way', 'delivered', 'cancelled'].map((status) => (
+                <div className="flex gap-2 flex-wrap mb-3">
+                    {([
+                        { key: 'all', label: 'All' },
+                        { key: 'pending', label: 'Pending' },
+                        { key: 'ready', label: 'Ready' },
+                        { key: 'picked_up', label: 'Picked Up' },
+                        { key: 'delivered', label: 'Delivered' },
+                        { key: 'cancelled', label: 'Cancelled' },
+                    ] as const).map(({ key, label }) => (
                         <button
-                            key={status}
-                            onClick={() => setFilter(status)}
-                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${filter === status
-                                ? status === 'awaiting_rider' ? 'bg-amber-500 text-white' : 'bg-orange-500 text-white'
-                                : status === 'awaiting_rider' ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                }`}
+                            key={key}
+                            onClick={() => setFilter(key)}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                                filter === key
+                                    ? 'bg-orange-500 text-white'
+                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                            }`}
                         >
-                            {status === 'awaiting_rider' ? '⚠️ AWAITING RIDER' : status.replace('_', ' ').toUpperCase()}
+                            {label}
                         </button>
                     ))}
+                </div>
+
+                {/* Date Filter */}
+                <div className="flex items-center gap-2 flex-wrap pt-3 border-t border-gray-100">
+                    <span className="text-sm font-semibold text-gray-500 mr-1">Date:</span>
+                    {([
+                        { key: 'today', label: 'Today' },
+                        { key: 'yesterday', label: 'Yesterday' },
+                        { key: 'last7', label: 'Last 7 Days' },
+                        { key: 'last30', label: 'Last 30 Days' },
+                        { key: 'custom', label: 'Custom' },
+                    ] as const).map(({ key, label }) => (
+                        <button
+                            key={key}
+                            onClick={() => setDateFilter(key)}
+                            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                                dateFilter === key
+                                    ? 'bg-orange-500 text-white'
+                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                            }`}
+                        >
+                            {label}
+                        </button>
+                    ))}
+                    {dateFilter === 'custom' && (
+                        <div className="flex items-center gap-2 ml-2">
+                            <input
+                                type="date"
+                                value={dateFrom}
+                                onChange={(e) => setDateFrom(e.target.value)}
+                                className="px-3 py-1.5 rounded-lg text-sm border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-400"
+                            />
+                            <span className="text-gray-400 text-sm">to</span>
+                            <input
+                                type="date"
+                                value={dateTo}
+                                onChange={(e) => setDateTo(e.target.value)}
+                                className="px-3 py-1.5 rounded-lg text-sm border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-400"
+                            />
+                        </div>
+                    )}
                 </div>
             </div>
 
