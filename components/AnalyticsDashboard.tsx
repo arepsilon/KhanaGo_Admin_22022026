@@ -109,14 +109,14 @@ export default function AnalyticsDashboard({
             const earnings = completed.reduce((acc, o) => {
                 acc.deliveryFees += o.delivery_fee || 0;
                 acc.platformFees += o.platform_fee || 0;
-                const r = o.restaurant;
+                const r = Array.isArray(o.restaurant) ? o.restaurant[0] : o.restaurant as any;
                 if (r) {
                     acc.commission += (o.subtotal || 0) * ((r.commission_percent || 0) / 100);
                     acc.restaurantFee += r.platform_fee_per_order || 0;
                     acc.txFee += (o.total || 0) * ((r.transaction_charge_percent || 0) / 100);
                 }
                 return acc;
-            }, { deliveryFees: 0, platformFees: 0, commission: 0, restaurantFee: 0, txFee: 0 });
+            }, { deliveryFees: 0, platformFees: 0, commission: 0, restaurantFee: 0, txFee: 0 } as { deliveryFees: number; platformFees: number; commission: number; restaurantFee: number; txFee: number; total?: number });
             earnings.total = earnings.commission + earnings.restaurantFee + earnings.txFee + earnings.platformFees;
 
             // ── Daily Trend ───────────────────────────────────────────────────
@@ -178,7 +178,8 @@ export default function AnalyticsDashboard({
             // ── Restaurant Performance ────────────────────────────────────────
             const restMap: Record<string, any> = {};
             orders.forEach(o => {
-                const name = o.restaurant?.name || 'Unknown';
+                const rest = Array.isArray(o.restaurant) ? o.restaurant[0] : o.restaurant as any;
+                const name = rest?.name || 'Unknown';
                 if (!restMap[name]) restMap[name] = { name, orders: 0, revenue: 0, cancelled: 0 };
                 if (o.status === 'delivered') { restMap[name].orders++; restMap[name].revenue += o.subtotal || 0; }
                 if (['cancelled', 'rejected'].includes(o.status)) restMap[name].cancelled++;
@@ -223,7 +224,8 @@ export default function AnalyticsDashboard({
             completed.forEach(o => {
                 const del = Array.isArray(o.delivery) ? o.delivery[0] : o.delivery;
                 if (!del?.rider_id) return;
-                const name = del.rider?.full_name || del.rider_id.slice(0, 8);
+                const rider = Array.isArray(del.rider) ? del.rider[0] : del.rider as any;
+                const name = rider?.full_name || del.rider_id.slice(0, 8);
                 if (!riderMap[name]) riderMap[name] = { name, deliveries: 0, totalTransitMs: 0, earnings: 0 };
                 riderMap[name].deliveries++;
                 riderMap[name].earnings += o.delivery_fee || 0;
@@ -361,7 +363,7 @@ export default function AnalyticsDashboard({
                         <XAxis dataKey="date" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
                         <YAxis yAxisId="left" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={v => `₹${(v / 1000).toFixed(0)}k`} />
                         <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-                        <Tooltip formatter={(val: any, name: string) => name === 'gmv' ? [fmt(val), 'GMV'] : [val, 'Orders']} />
+                        <Tooltip formatter={(val: any, name?: string) => name === 'gmv' ? [fmt(val), 'GMV'] : [val, 'Orders']} />
                         <Legend />
                         <Area yAxisId="left" type="monotone" dataKey="gmv" stroke="#10b981" strokeWidth={2} fill="url(#gmvGrad)" name="GMV" />
                         <Bar yAxisId="right" dataKey="orders" fill="#3b82f6" opacity={0.7} name="Orders" radius={[3, 3, 0, 0]} />
