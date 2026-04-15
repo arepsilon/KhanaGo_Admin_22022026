@@ -381,6 +381,7 @@ export default function OrdersTable() {
                             <th className="text-center py-3 px-3 font-semibold text-gray-600 text-xs uppercase tracking-wider">Status</th>
                             <th className="text-left py-3 px-3 font-semibold text-gray-600 text-xs uppercase tracking-wider">Rider</th>
                             <th className="text-center py-3 px-2 font-semibold text-gray-600 text-xs uppercase tracking-wider">Prep</th>
+                            <th className="text-center py-3 px-2 font-semibold text-gray-600 text-xs uppercase tracking-wider">Picked Up</th>
                             <th className="text-center py-3 px-2 font-semibold text-gray-600 text-xs uppercase tracking-wider">Delivery</th>
                             <th className="text-right py-3 px-3 font-semibold text-gray-600 text-xs uppercase tracking-wider">Time</th>
                             <th className="w-6 py-3 px-1"></th>
@@ -444,8 +445,24 @@ export default function OrdersTable() {
                                             )}
                                         </td>
                                         <td className="py-2.5 px-2 text-center">
-                                            {order.accepted_at && order.prepared_at ? (
-                                                <span className="text-xs font-medium text-indigo-600">{formatDuration(order.accepted_at, order.prepared_at)}</span>
+                                            {order.accepted_at && delivery?.pickup_time ? (
+                                                <span className="text-xs font-medium text-indigo-600">{formatDuration(order.accepted_at, delivery.pickup_time)}</span>
+                                            ) : (
+                                                <span className="text-xs text-gray-400">—</span>
+                                            )}
+                                        </td>
+                                        <td className="py-2.5 px-2 text-center">
+                                            {delivery?.pickup_time ? (
+                                                <div>
+                                                    <div className="text-xs font-medium text-violet-600">
+                                                        {new Date(delivery.pickup_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                    </div>
+                                                    {order.delivered_at && (
+                                                        <div className="text-[10px] text-gray-400">
+                                                            +{formatDuration(delivery.pickup_time, order.delivered_at)}
+                                                        </div>
+                                                    )}
+                                                </div>
                                             ) : (
                                                 <span className="text-xs text-gray-400">—</span>
                                             )}
@@ -490,7 +507,7 @@ export default function OrdersTable() {
                                     {
                                         isExpanded && (
                                             <tr>
-                                                <td colSpan={11} className="p-0 border-b-4 border-orange-200">
+                                                <td colSpan={12} className="p-0 border-b-4 border-orange-200">
                                                     <div className="border-t border-orange-200 px-4 py-3 bg-orange-50/50">
                                                         {/* Top: Badges */}
                                                         <div className="flex flex-wrap gap-1.5 mb-3">
