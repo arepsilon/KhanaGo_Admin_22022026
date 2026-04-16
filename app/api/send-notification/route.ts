@@ -20,32 +20,19 @@ export async function POST(req: NextRequest) {
         const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
         // Fetch tokens (bypassing the "Admins can read all tokens" RLS block)
-        const tokens = [];
-        const chunkSize = 50;
-        for (let i = 0; i < targetUserIds.length; i += chunkSize) {
-            const chunk = targetUserIds.slice(i, i + chunkSize);
-            const { data, error: tokenError } = await supabase
-                .from('push_tokens')
-                .select('user_id, token')
-                .eq('app_type', 'customer')
-                .in('user_id', chunk)
-                .order('updated_at', { ascending: false });
+        const { data: tokens, error: tokenError } = await supabase
+            .from('push_tokens')
+            .select('user_id, token')
+            .eq('app_type', 'customer')
+            .in('user_id', targetUserIds)
+            .order('updated_at', { ascending: false });
 
-            if (tokenError) {
-                console.error("Supabase tokens query error:", tokenError);
-                return NextResponse.json({ error: `Supabase query error: ${tokenError.message || JSON.stringify(tokenError)}` }, { status: 500 });
-            }
-            if (data) {
-                tokens.push(...data);
-            }
-        }
-
-        if (!tokens || tokens.length === 0) {
+        if (tokenError || !tokens || tokens.length === 0) {
             return NextResponse.json({ error: 'No active push tokens found for targeted users' }, { status: 404 });
         }
 
         // Keep only the latest token per user to prevent duplicate notifications
-        const latestTokenPerUser = [];
+        const latestTokenPerUser: typeof tokens = [];
         const seenUsers = new Set<string>();
         for (const t of tokens) {
             if (!seenUsers.has(t.user_id)) {
@@ -56,19 +43,12 @@ export async function POST(req: NextRequest) {
 
         // Fetch profiles to get full names for template personalization
         const userIdsForNames = latestTokenPerUser.map(t => t.user_id);
-        const userProfiles = [];
-        for (let i = 0; i < userIdsForNames.length; i += chunkSize) {
-            const chunk = userIdsForNames.slice(i, i + chunkSize);
-            const { data } = await supabase
-                .from('profiles')
-                .select('id, full_name')
-                .in('id', chunk);
-            if (data) {
-                userProfiles.push(...data);
-            }
-        }
+        const { data: userProfiles } = await supabase
+            .from('profiles')
+            .select('id, full_name')
+            .in('id', userIdsForNames);
             
-        const nameMap = new Map(userProfiles.map(p => [p.id, p.full_name || 'there']));
+        const nameMap = new Map((userProfiles || []).map(p => [p.id, p.full_name || 'there']));
 
         // Build notifications with {name} replaced
         const notifications = latestTokenPerUser.map(t => {
