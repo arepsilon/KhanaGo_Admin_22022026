@@ -13,7 +13,6 @@ interface OrphanedOrder {
     rider_assignment_exhausted_at: string;
     created_at: string;
     restaurant: { name: string } | null;
-    customer: { full_name: string } | null;
     total: number;
 }
 
@@ -63,8 +62,7 @@ export default function OrphanedOrdersAlert() {
                     rider_assignment_exhausted_at,
                     created_at,
                     total,
-                    restaurant:restaurants(name),
-                    customer:profiles!customer_id(full_name)
+                    restaurant:restaurants(name)
                 `)
                 .not('rider_assignment_exhausted_at', 'is', null)
                 .in('status', ['accepted', 'preparing', 'ready'])
@@ -77,7 +75,6 @@ export default function OrphanedOrdersAlert() {
                 const transformed = data.map((order: any) => ({
                     ...order,
                     restaurant: Array.isArray(order.restaurant) ? order.restaurant[0] : order.restaurant,
-                    customer: Array.isArray(order.customer) ? order.customer[0] : order.customer,
                 }));
                 setOrphanedOrders(transformed);
             }

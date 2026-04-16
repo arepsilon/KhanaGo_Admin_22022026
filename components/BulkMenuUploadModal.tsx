@@ -3,7 +3,8 @@
 import React, { useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Papa from 'papaparse';
-import { Upload, Download, AlertCircle, CheckCircle, X, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { Upload, Download, AlertCircle, CheckCircle, X, ChevronDown, ChevronUp, AlertTriangle, RefreshCw } from 'lucide-react';
 
 interface BulkMenuUploadModalProps {
     isOpen: boolean;
@@ -25,12 +26,14 @@ interface ParsedItem {
 
 export default function BulkMenuUploadModal({ isOpen, onClose }: BulkMenuUploadModalProps) {
     const [step, setStep] = useState<'upload' | 'preview' | 'processing' | 'result'>('upload');
+    const [mode, setMode] = useState<'insert' | 'update_prices'>('insert');
     const [parsedItems, setParsedItems] = useState<ParsedItem[]>([]);
     const [restaurantsMap, setRestaurantsMap] = useState<Record<string, string>>({}); // Name -> ID
     interface RestaurantResult {
         name: string;
         status: 'Found' | 'Not Found';
         added: number;
+        updated: number;
         skipped: { name: string; reason: string }[];
         failed: { name: string; reason: string }[];
     }
@@ -41,32 +44,60 @@ export default function BulkMenuUploadModal({ isOpen, onClose }: BulkMenuUploadM
 
     const supabase = createClient();
 
-    const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const parseExcelFile = (file: File): Promise<ParsedItem[]> => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const data = new Uint8Array(e.target?.result as ArrayBuffer);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+                    const rows = XLSX.utils.sheet_to_json<ParsedItem>(sheet, { defval: '' });
+                    resolve(rows);
+                } catch (err: any) {
+                    reject(new Error(`Excel parse error: ${err.message}`));
+                }
+            };
+            reader.onerror = () => reject(new Error('Failed to read file'));
+            reader.readAsArrayBuffer(file);
+        });
+    };
+
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
-
         setError(null);
-        Papa.parse(file, {
-            header: true,
-            skipEmptyLines: true,
-            complete: (results: Papa.ParseResult<ParsedItem>) => {
-                if (results.errors.length > 0) {
-                    setError(`CSV Parsing Error: ${results.errors[0].message}`);
-                    return;
-                }
-                const items = results.data;
-                // Basic validation of required columns
-                if (!items[0] || !items[0]['Restaurant Name'] || !items[0]['Name'] || !items[0]['Price']) {
-                    setError('Missing required columns: Restaurant Name, Name, Price');
-                    return;
-                }
-                setParsedItems(items);
-                setStep('preview');
-            },
-            error: (err: Error) => {
-                setError(`File Error: ${err.message}`);
+
+        const isXlsx = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
+
+        try {
+            let items: ParsedItem[];
+
+            if (isXlsx) {
+                items = await parseExcelFile(file);
+            } else {
+                items = await new Promise<ParsedItem[]>((resolve, reject) => {
+                    Papa.parse(file, {
+                        header: true,
+                        skipEmptyLines: true,
+                        complete: (res: Papa.ParseResult<ParsedItem>) => {
+                            if (res.errors.length > 0) reject(new Error(res.errors[0].message));
+                            else resolve(res.data);
+                        },
+                        error: (err: Error) => reject(err),
+                    });
+                });
             }
-        });
+
+            if (!items[0] || !items[0]['Restaurant Name'] || !items[0]['Name'] || !items[0]['Price']) {
+                setError('Missing required columns: Restaurant Name, Name, Price');
+                return;
+            }
+            setParsedItems(items);
+            setStep('preview');
+        } catch (err: any) {
+            setError(`File Error: ${err.message}`);
+        }
     };
 
     const fetchRestaurants = async () => {
@@ -93,32 +124,25 @@ export default function BulkMenuUploadModal({ isOpen, onClose }: BulkMenuUploadM
 
         const currentResults: Record<string, RestaurantResult> = {};
 
-        // Helper to init result
         const getOrCreateResult = (name: string): RestaurantResult => {
             if (!currentResults[name]) {
-                currentResults[name] = {
-                    name,
-                    status: 'Found', // Default, will update if not found in map
-                    added: 0,
-                    skipped: [],
-                    failed: []
-                };
+                currentResults[name] = { name, status: 'Found', added: 0, updated: 0, skipped: [], failed: [] };
             }
             return currentResults[name];
         };
 
-        // 0. Fetch Existing Items to prevent duplicates
-        // We need to fetch items for ALL restaurants involved in this upload to be efficient.
-        // Or per restaurant. Given the number of items might be small, let's fetch all items for the restaurants in the map.
         const restaurantIds = Object.values(map);
+
+        // Fetch existing items (id + name + restaurant_id) for lookup
         const { data: existingItemsData } = await supabase
             .from('menu_items')
-            .select('restaurant_id, name')
+            .select('id, restaurant_id, name')
             .in('restaurant_id', restaurantIds);
 
-        const existingSet = new Set<string>();
+        // Map: "restaurantId-itemNameLower" -> item id
+        const existingMap = new Map<string, string>();
         existingItemsData?.forEach(item => {
-            existingSet.add(`${item.restaurant_id}-${item.name.toLowerCase().trim()}`);
+            existingMap.set(`${item.restaurant_id}-${item.name.toLowerCase().trim()}`, item.id);
         });
 
         for (const item of parsedItems) {
@@ -129,69 +153,78 @@ export default function BulkMenuUploadModal({ isOpen, onClose }: BulkMenuUploadM
             const restaurantId = map[restName.toLowerCase()];
 
             if (!restaurantId) {
-                resResult.status = 'Not Found'; // Update status if not found
-                resResult.failed.push({ name: item['Name'], reason: 'Restaurant not found' });
+                resResult.status = 'Not Found';
+                resResult.failed.push({ name: item['Name'], reason: 'Restaurant not found in DB' });
                 continue;
             }
 
-            // Check for Duplicate
-            const duplicateKey = `${restaurantId}-${item['Name'].trim().toLowerCase()}`;
-            if (existingSet.has(duplicateKey)) {
-                resResult.skipped.push({ name: item['Name'], reason: 'Duplicate item' });
+            const priceRaw = String(item['Price']).replace(/[^0-9.]/g, '');
+            const price = parseFloat(priceRaw);
+            if (isNaN(price)) {
+                resResult.failed.push({ name: item['Name'], reason: 'Invalid price' });
                 continue;
             }
+
+            const lookupKey = `${restaurantId}-${item['Name'].trim().toLowerCase()}`;
+            const existingId = existingMap.get(lookupKey);
 
             try {
-                // 1. Resolve Category
-                let categoryId = null;
-                const catName = item['Category']?.trim() || 'General';
+                if (mode === 'update_prices') {
+                    // UPDATE mode: only update base_price on existing items
+                    if (!existingId) {
+                        resResult.skipped.push({ name: item['Name'], reason: 'Item not found in DB (skipped)' });
+                        continue;
+                    }
+                    const { error: updateError } = await supabase
+                        .from('menu_items')
+                        .update({ base_price: price })
+                        .eq('id', existingId);
 
-                // Check if likely category exists (globally or per restaurant? Schema says categories are global? No, let's check schema... 
-                // Wait, based on previous `RestaurantMenuModal`, categories seemed to be fetched generally `from('categories')` without restaurant_id filter?
-                // Let's assume categories are global for now based on typical setup or check if they have restaurant_id.
-                // Re-reading `RestaurantMenuModal.tsx`: `const { data: catData } = await supabase.from('categories').select('*').order('name');` 
-                // It seems categories are GLOBAL. Good.
-
-                const { data: catData } = await supabase.from('categories').select('id').ilike('name', catName).single();
-
-                if (catData) {
-                    categoryId = catData.id;
+                    if (updateError) throw updateError;
+                    resResult.updated++;
                 } else {
-                    // Create Category
-                    // We need a sort_order.
-                    const { data: maxOrder } = await supabase.from('categories').select('sort_order').order('sort_order', { ascending: false }).limit(1).single();
-                    const nextOrder = (maxOrder?.sort_order || 0) + 10;
+                    // INSERT mode: skip duplicates
+                    if (existingId) {
+                        resResult.skipped.push({ name: item['Name'], reason: 'Duplicate item' });
+                        continue;
+                    }
 
-                    const { data: newCat, error: catError } = await supabase.from('categories').insert({ name: catName, sort_order: nextOrder }).select().single();
-                    if (catError) throw new Error(`Category creation failed: ${catError.message}`);
-                    categoryId = newCat.id;
+                    // Resolve category
+                    let categoryId = null;
+                    const catName = item['Category']?.trim() || 'General';
+                    const { data: catData } = await supabase.from('categories').select('id').ilike('name', catName).single();
+
+                    if (catData) {
+                        categoryId = catData.id;
+                    } else {
+                        const { data: maxOrder } = await supabase.from('categories').select('sort_order').order('sort_order', { ascending: false }).limit(1).single();
+                        const nextOrder = (maxOrder?.sort_order || 0) + 10;
+                        const { data: newCat, error: catError } = await supabase.from('categories').insert({ name: catName, sort_order: nextOrder }).select().single();
+                        if (catError) throw new Error(`Category creation failed: ${catError.message}`);
+                        categoryId = newCat.id;
+                    }
+
+                    const isVeg = ['yes', 'true', '1'].includes(String(item['Veg'] || '').toLowerCase());
+                    const isVegan = ['yes', 'true', '1'].includes(String(item['Vegan'] || '').toLowerCase());
+                    const isAvail = !(['no', 'false', '0'].includes(String(item['Available'] || '').toLowerCase()));
+
+                    const { error: insertError } = await supabase.from('menu_items').insert({
+                        restaurant_id: restaurantId,
+                        name: item['Name'],
+                        description: item['Description'] || '',
+                        base_price: price,
+                        category_id: categoryId,
+                        is_vegetarian: isVeg,
+                        is_vegan: isVegan,
+                        preparation_time: parseInt(item['Prep Time'] || '15'),
+                        is_available: isAvail,
+                        image_url: item['Image URL'] || null,
+                    });
+
+                    if (insertError) throw insertError;
+                    existingMap.set(lookupKey, 'inserted');
+                    resResult.added++;
                 }
-
-                // 2. Insert Item
-                const price = parseFloat(item['Price'].replace(/[^0-9.]/g, ''));
-                const isVeg = ['yes', 'true', '1'].includes(item['Veg']?.toLowerCase() || '');
-                const isVegan = ['yes', 'true', '1'].includes(item['Vegan']?.toLowerCase() || '');
-                const isAvail = !(['no', 'false', '0'].includes(item['Available']?.toLowerCase() || '')); // Default true
-
-                const { error: insertError } = await supabase.from('menu_items').insert({
-                    restaurant_id: restaurantId,
-                    name: item['Name'],
-                    description: item['Description'] || '',
-                    price: isNaN(price) ? 0 : price,
-                    category_id: categoryId,
-                    is_vegetarian: isVeg,
-                    is_vegan: isVegan,
-                    preparation_time: parseInt(item['Prep Time'] || '15'),
-                    is_available: isAvail,
-                    image_url: item['Image URL'] || null
-                });
-
-                if (insertError) throw insertError;
-
-                // Add to set so we don't add it again if the CSV has duplicates
-                existingSet.add(duplicateKey);
-                resResult.added++;
-
             } catch (err: any) {
                 resResult.failed.push({ name: item['Name'], reason: err.message });
             }
@@ -214,6 +247,14 @@ export default function BulkMenuUploadModal({ isOpen, onClose }: BulkMenuUploadM
         document.body.removeChild(link);
     };
 
+    const resetModal = () => {
+        setStep('upload');
+        setParsedItems([]);
+        setResults({});
+        setError(null);
+        setExpandedRes(null);
+    };
+
     if (!isOpen) return null;
 
     return (
@@ -226,17 +267,38 @@ export default function BulkMenuUploadModal({ isOpen, onClose }: BulkMenuUploadM
 
                 <div className="p-6 flex-1 overflow-y-auto">
                     {step === 'upload' && (
-                        <div className="space-y-6 text-center">
-                            <div className="border-2 border-dashed border-slate-300 rounded-xl p-10 hover:border-orange-500 transition-colors">
+                        <div className="space-y-6">
+                            {/* Mode Toggle */}
+                            <div className="bg-slate-50 rounded-xl p-4 border">
+                                <p className="text-sm font-bold text-slate-700 mb-3">Upload Mode</p>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <button
+                                        onClick={() => setMode('insert')}
+                                        className={`p-3 rounded-lg border-2 text-left transition-all ${mode === 'insert' ? 'border-orange-500 bg-orange-50' : 'border-slate-200 hover:border-slate-300'}`}
+                                    >
+                                        <p className="font-bold text-sm text-slate-900">Add New Items</p>
+                                        <p className="text-xs text-slate-500 mt-1">Inserts items that don't exist yet. Skips duplicates.</p>
+                                    </button>
+                                    <button
+                                        onClick={() => setMode('update_prices')}
+                                        className={`p-3 rounded-lg border-2 text-left transition-all ${mode === 'update_prices' ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:border-slate-300'}`}
+                                    >
+                                        <p className="font-bold text-sm text-slate-900">Update Prices Only</p>
+                                        <p className="text-xs text-slate-500 mt-1">Updates base_price for existing items. Won't create new items.</p>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="border-2 border-dashed border-slate-300 rounded-xl p-10 hover:border-orange-500 transition-colors text-center">
                                 <Upload className="mx-auto h-12 w-12 text-slate-500 mb-4" />
-                                <p className="mb-4 text-slate-700">Drag and drop your CSV file here, or click to browse</p>
-                                <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" id="csv-upload" />
+                                <p className="mb-4 text-slate-700">Upload your CSV or Excel (.xlsx) file</p>
+                                <input type="file" accept=".csv,.xlsx,.xls" onChange={handleFileUpload} className="hidden" id="csv-upload" />
                                 <label htmlFor="csv-upload" className="bg-orange-600 text-white px-6 py-2 rounded-lg font-bold cursor-pointer hover:bg-orange-700">
-                                    Select CSV File
+                                    Select File
                                 </label>
                             </div>
                             <button onClick={downloadTemplate} className="text-orange-600 font-bold flex items-center justify-center gap-2 mx-auto hover:underline">
-                                <Download size={18} /> Download Template
+                                <Download size={18} /> Download CSV Template
                             </button>
                             {error && <p className="text-red-500 font-medium bg-red-50 p-3 rounded-lg">{error}</p>}
                         </div>
@@ -245,7 +307,12 @@ export default function BulkMenuUploadModal({ isOpen, onClose }: BulkMenuUploadM
                     {step === 'preview' && (
                         <div className="space-y-4">
                             <div className="flex justify-between items-center">
-                                <h3 className="font-bold">Preview ({parsedItems.length} items)</h3>
+                                <div>
+                                    <h3 className="font-bold">Preview ({parsedItems.length} items)</h3>
+                                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${mode === 'update_prices' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>
+                                        {mode === 'update_prices' ? 'Update Prices Mode' : 'Add New Items Mode'}
+                                    </span>
+                                </div>
                                 <div className="flex gap-2">
                                     <button
                                         onClick={async () => {
@@ -350,6 +417,7 @@ export default function BulkMenuUploadModal({ isOpen, onClose }: BulkMenuUploadM
                                             <th className="p-3 text-left">Restaurant</th>
                                             <th className="p-3 text-center">Status</th>
                                             <th className="p-3 text-center text-green-600">Added</th>
+                                            <th className="p-3 text-center text-blue-600">Updated</th>
                                             <th className="p-3 text-center text-yellow-600">Skipped</th>
                                             <th className="p-3 text-center text-red-600">Failed</th>
                                             <th className="p-3 w-10"></th>
@@ -361,12 +429,12 @@ export default function BulkMenuUploadModal({ isOpen, onClose }: BulkMenuUploadM
                                                 <tr className="hover:bg-slate-50 transition-colors">
                                                     <td className="p-3 font-medium text-slate-900">{res.name}</td>
                                                     <td className="p-3 text-center">
-                                                        <span className={`px-2 py-1 rounded-full text-xs font-bold ${res.status === 'Found' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                                                            }`}>
+                                                        <span className={`px-2 py-1 rounded-full text-xs font-bold ${res.status === 'Found' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
                                                             {res.status}
                                                         </span>
                                                     </td>
                                                     <td className="p-3 text-center font-bold text-green-600">{res.added}</td>
+                                                    <td className="p-3 text-center font-bold text-blue-600">{res.updated}</td>
                                                     <td
                                                         className={`p-3 text-center font-bold ${res.skipped.length > 0 ? 'text-yellow-600 cursor-pointer underline decoration-dotted' : 'text-slate-400'}`}
                                                         onClick={() => res.skipped.length > 0 && setExpandedRes(expandedRes === res.name + 'skipped' ? null : res.name + 'skipped')}
@@ -383,7 +451,6 @@ export default function BulkMenuUploadModal({ isOpen, onClose }: BulkMenuUploadM
                                                         {(res.skipped.length > 0 || res.failed.length > 0) && (
                                                             <button
                                                                 onClick={() => {
-                                                                    // Toggle priority: Failed > Skipped
                                                                     const key = res.failed.length > 0 ? res.name + 'failed' : res.name + 'skipped';
                                                                     setExpandedRes(expandedRes === key ? null : key);
                                                                 }}
@@ -433,9 +500,14 @@ export default function BulkMenuUploadModal({ isOpen, onClose }: BulkMenuUploadM
                                 </table>
                             </div>
 
-                            <button onClick={onClose} className="w-full bg-slate-800 text-white py-3 rounded-lg font-bold hover:bg-slate-900">
-                                Close
-                            </button>
+                            <div className="flex gap-3">
+                                <button onClick={resetModal} className="flex-1 bg-slate-100 text-slate-800 py-3 rounded-lg font-bold hover:bg-slate-200 flex items-center justify-center gap-2">
+                                    <RefreshCw size={16} /> Upload Another
+                                </button>
+                                <button onClick={onClose} className="flex-1 bg-slate-800 text-white py-3 rounded-lg font-bold hover:bg-slate-900">
+                                    Close
+                                </button>
+                            </div>
                         </div>
                     )}
                 </div>

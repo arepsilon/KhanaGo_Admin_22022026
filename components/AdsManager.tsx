@@ -6,7 +6,8 @@ import { Trash2, Image as ImageIcon, Plus, Pencil, Tag } from 'lucide-react';
 
 export default function AdsManager() {
     const [ads, setAds] = useState<any[]>([]);
-    const [restaurants, setRestaurants] = useState<any[]>([]); // New state
+    const [restaurants, setRestaurants] = useState<any[]>([]);
+    const [coupons, setCoupons] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [submitting, setSubmitting] = useState(false);
@@ -24,18 +25,14 @@ export default function AdsManager() {
     const [linkTarget, setLinkTarget] = useState('');
     const [selectedCityId, setSelectedCityId] = useState<string>('');
 
-    // Integrated Coupon State
-    const [includeCoupon, setIncludeCoupon] = useState(false);
-    const [couponCode, setCouponCode] = useState('');
-    const [discountType, setDiscountType] = useState<'percentage' | 'fixed'>('percentage');
-    const [discountValue, setDiscountValue] = useState('');
-    const [minOrderValue, setMinOrderValue] = useState('');
-    const [maxDiscountValue, setMaxDiscountValue] = useState('');
+    // Coupon attachment — pick from existing coupons
+    const [selectedCouponCode, setSelectedCouponCode] = useState<string>('');
 
     useEffect(() => {
         fetchAds();
-        fetchRestaurants(); // Fetch restaurants
-        fetchCities(); // Fetch cities
+        fetchRestaurants();
+        fetchCities();
+        fetchCoupons();
     }, []);
 
     const fetchCities = async () => {
@@ -46,6 +43,12 @@ export default function AdsManager() {
     const fetchRestaurants = async () => {
         const { data, error } = await supabase.from('restaurants').select('id, name');
         if (!error && data) setRestaurants(data);
+    };
+
+    const fetchCoupons = async () => {
+        const res = await fetch('/api/coupons');
+        const data = await res.json();
+        if (Array.isArray(data)) setCoupons(data.filter((c: any) => c.is_active));
     };
 
     const fetchAds = async () => {
@@ -70,27 +73,9 @@ export default function AdsManager() {
         setSelectedCityId(ad.city_id || '');
 
         // Pre-fill coupon data if exists
-        if (ad.coupons) {
-            setIncludeCoupon(true);
-            setCouponCode(ad.coupons.code);
-            setDiscountType(ad.coupons.discount_type);
-            setDiscountValue(ad.coupons.discount_value.toString());
-            setMinOrderValue(ad.coupons.min_order_value?.toString() || '');
-            setMaxDiscountValue(ad.coupons.max_discount_value?.toString() || '');
-        } else {
-            setIncludeCoupon(false);
-            resetCouponForm();
-        }
+        setSelectedCouponCode(ad.coupon_code || '');
 
         setIsModalOpen(true);
-    };
-
-    const resetCouponForm = () => {
-        setCouponCode('');
-        setDiscountType('percentage');
-        setDiscountValue('');
-        setMinOrderValue('');
-        setMaxDiscountValue('');
     };
 
     const resetForms = () => {
@@ -101,87 +86,49 @@ export default function AdsManager() {
         setImageFile(null);
         setEditingId(null);
         setSelectedCityId('');
+        setSelectedCouponCode('');
         setIsModalOpen(false);
-        setIncludeCoupon(false);
-        resetCouponForm();
     };
 
     const handleSave = async () => {
         if (!adTitle) return alert('Title is required');
         if (!editingId && !imageFile) return alert('Image is required');
-
-        if (includeCoupon) {
-            if (!couponCode || !discountValue) return alert('Coupon Code and Value are required');
-        }
-
         setSubmitting(true);
 
         try {
-            // 1. Handle Image Upload
-            let imageUrl = null;
-            if (editingId) {
-                const existing = ads.find(a => a.id === editingId);
-                imageUrl = existing.image_url;
-            }
-
+            // 1. Upload image if provided
+            let imageUrl = editingId ? ads.find(a => a.id === editingId)?.image_url : null;
             if (imageFile) {
                 const fileExt = imageFile.name.split('.').pop();
-                const fileName = `${Math.random()}.${fileExt}`;
-                const filePath = `ads/${fileName}`;
-
-                const { error: uploadError } = await supabase.storage
-                    .from('ads')
-                    .upload(filePath, imageFile);
-
+                const filePath = `ads/${Math.random()}.${fileExt}`;
+                const { error: uploadError } = await supabase.storage.from('ads').upload(filePath, imageFile);
                 if (uploadError) throw uploadError;
-
-                const { data } = supabase.storage.from('ads').getPublicUrl(filePath);
-                imageUrl = data.publicUrl;
+                imageUrl = supabase.storage.from('ads').getPublicUrl(filePath).data.publicUrl;
             }
 
-            // 2. Handle Coupon (Upsert)
-            let finalCouponCode = null;
-            if (includeCoupon) {
-                const couponPayload = {
-                    code: couponCode.toUpperCase(),
-                    discount_type: discountType,
-                    discount_value: parseFloat(discountValue),
-                    min_order_value: minOrderValue ? parseFloat(minOrderValue) : 0,
-                    max_discount_value: maxDiscountValue ? parseFloat(maxDiscountValue) : null,
-                    is_active: true,
-                    city_id: selectedCityId || null
-                };
-
-                const { error: couponError } = await supabase
-                    .from('coupons')
-                    .upsert(couponPayload, { onConflict: 'code' });
-
-                if (couponError) throw couponError;
-                finalCouponCode = couponCode.toUpperCase();
-            }
-
-            // 3. Handle Ad (Insert/Update)
+            // 2. Save ad via API (service role bypasses RLS)
             const adPayload = {
                 title: adTitle,
                 category: adCategory,
                 image_url: imageUrl,
                 restaurant_id: adCategory === 'restaurant' ? (selectedRestaurant || null) : null,
                 link_target: adCategory === 'grocery' ? (linkTarget || null) : null,
-                coupon_code: finalCouponCode,
-                city_id: selectedCityId || null
+                coupon_code: selectedCouponCode || null,
+                city_id: selectedCityId || null,
             };
 
-            const { error: dbError } = editingId
-                ? await supabase.from('ads').update(adPayload).eq('id', editingId)
-                : await supabase.from('ads').insert(adPayload);
-
-            if (dbError) throw dbError;
+            const res = await fetch('/api/ads', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ adPayload, editingId }),
+            });
+            const result = await res.json();
+            if (!res.ok) throw new Error(result.error);
 
             alert(editingId ? 'Promotion Updated!' : 'Promotion Created!');
             resetForms();
             fetchAds();
         } catch (error: any) {
-            console.error(error);
             alert('Error saving promotion: ' + error.message);
         } finally {
             setSubmitting(false);
@@ -190,18 +137,13 @@ export default function AdsManager() {
 
     const deleteAd = async (id: string) => {
         if (!confirm('Delete this promotion?')) return;
-        try {
-            const { error } = await supabase.from('ads').delete().eq('id', id);
-            if (error) {
-                console.error(error);
-                alert('Database Error:\n' + error.message);
-            } else {
-                fetchAds();
-            }
-        } catch (err: any) {
-            console.error(err);
-            alert('App Error:\n' + err.message);
-        }
+        const res = await fetch('/api/ads', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id }),
+        });
+        if (res.ok) fetchAds();
+        else alert('Failed to delete promotion');
     };
 
     const filteredAds = selectedCityFilter === 'all'
@@ -366,79 +308,43 @@ export default function AdsManager() {
 
                             <hr className="border-gray-100" />
 
-                            {/* Coupon Section */}
+                            {/* Coupon Attachment */}
                             <div>
-                                <label className="flex items-center gap-2 cursor-pointer mb-4">
-                                    <input
-                                        type="checkbox"
-                                        className="w-5 h-5 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-                                        checked={includeCoupon}
-                                        onChange={e => setIncludeCoupon(e.target.checked)}
-                                    />
-                                    <span className="font-bold text-gray-700">Attach Coupon Code</span>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Attach Coupon <span className="text-gray-400 font-normal">(optional)</span>
                                 </label>
-
-                                {includeCoupon && (
-                                    <div className="bg-gray-50 p-4 rounded-xl space-y-4 border border-gray-100">
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-1">Coupon Code</label>
-                                            <input
-                                                className="w-full p-2 border rounded-lg uppercase"
-                                                value={couponCode}
-                                                onChange={e => setCouponCode(e.target.value.toUpperCase())}
-                                                placeholder="e.g., SAVE20"
-                                            />
-                                            <p className="text-xs text-gray-500 mt-1">Unique code for this discount</p>
+                                <select
+                                    className="w-full p-2 border rounded-lg bg-white"
+                                    value={selectedCouponCode}
+                                    onChange={e => setSelectedCouponCode(e.target.value)}
+                                >
+                                    <option value="">— No Coupon —</option>
+                                    {coupons.map(c => (
+                                        <option key={c.code} value={c.code}>
+                                            {c.code} — {c.discount_type === 'percentage' ? `${c.discount_value}% OFF` : `₹${c.discount_value} OFF`}
+                                            {c.user ? ` (${c.user.full_name || c.user.phone})` : ''}
+                                            {c.first_order_only ? ' · First Order' : ''}
+                                        </option>
+                                    ))}
+                                </select>
+                                {selectedCouponCode && (() => {
+                                    const c = coupons.find(x => x.code === selectedCouponCode);
+                                    if (!c) return null;
+                                    return (
+                                        <div className="mt-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2 flex items-center gap-2 text-sm text-green-800">
+                                            <Tag size={14} />
+                                            <span className="font-bold">{c.code}</span>
+                                            <span>·</span>
+                                            <span>{c.discount_type === 'percentage' ? `${c.discount_value}% OFF` : `₹${c.discount_value} OFF`}</span>
+                                            {c.min_order_value > 0 && <span className="text-green-600">· Min ₹{c.min_order_value}</span>}
+                                            {c.first_order_only && <span className="bg-amber-100 text-amber-700 text-xs px-1.5 py-0.5 rounded-full font-medium">First Order</span>}
+                                            {c.user && <span className="bg-violet-100 text-violet-700 text-xs px-1.5 py-0.5 rounded-full font-medium">{c.user.full_name || c.user.phone}</span>}
                                         </div>
-
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <div>
-                                                <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
-                                                <select
-                                                    className="w-full p-2 border rounded-lg bg-white"
-                                                    value={discountType}
-                                                    onChange={e => setDiscountType(e.target.value as any)}
-                                                >
-                                                    <option value="percentage">Percentage (%)</option>
-                                                    <option value="fixed">Fixed Amount (₹)</option>
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label className="block text-sm font-medium text-gray-700 mb-1">Value</label>
-                                                <input
-                                                    className="w-full p-2 border rounded-lg"
-                                                    type="number"
-                                                    value={discountValue}
-                                                    onChange={e => setDiscountValue(e.target.value)}
-                                                    placeholder="20"
-                                                />
-                                            </div>
-                                        </div>
-
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <div>
-                                                <label className="block text-sm font-medium text-gray-700 mb-1">Min Order (₹)</label>
-                                                <input
-                                                    className="w-full p-2 border rounded-lg"
-                                                    type="number"
-                                                    value={minOrderValue}
-                                                    onChange={e => setMinOrderValue(e.target.value)}
-                                                    placeholder="0"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="block text-sm font-medium text-gray-700 mb-1">Max Discount (₹)</label>
-                                                <input
-                                                    className="w-full p-2 border rounded-lg"
-                                                    type="number"
-                                                    value={maxDiscountValue}
-                                                    onChange={e => setMaxDiscountValue(e.target.value)}
-                                                    placeholder="Optional"
-                                                />
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
+                                    );
+                                })()}
+                                <p className="text-xs text-gray-400 mt-1">
+                                    Manage coupons in the Coupons tab. Only active coupons are shown.
+                                </p>
                             </div>
 
                             <div className="flex gap-3 pt-2">

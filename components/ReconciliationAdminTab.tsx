@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import {
     Loader2, TrendingUp, TrendingDown, Wallet, AlertCircle,
-    Bike, Store, IndianRupee, Table2, Download, ChevronDown, ChevronUp, Banknote,
+    Bike, Store, IndianRupee, Table2, Download, ChevronDown, ChevronUp, Receipt,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 
@@ -18,33 +18,42 @@ interface AdminOrderBreakdown {
     order_number: string;
     created_at: string;
     restaurantName: string;
-    orderTotal: number;          // what the customer paid
-    markup: number;
+    orderTotal: number;          // what the customer paid (orders.total)
+    commission: number;          // commission_percent % of food subtotal
     customerPlatformFee: number; // o.platform_fee — from customer
     platformFee: number;         // restaurant.platform_fee_per_order — from restaurant
     transactionFee: number;
     deliveryFee: number;
-    totalRevenue: number;
+    restaurantShare: number;     // what the restaurant earns after all deductions
+    platformRevenue: number;     // total platform revenue on this order
 }
 
 interface AdminStats {
-    markupRevenue: number;
-    restaurantPlatformFeeRevenue: number;  // platform_fee_per_order charged to restaurant
-    customerPlatformFeeRevenue: number;    // o.platform_fee charged to customer
+    // ── Period-specific (date range) ──────────────────────────────────
+    commissionRevenue: number;
+    restaurantPlatformFeeRevenue: number;
+    customerPlatformFeeRevenue: number;
     transactionFeeRevenue: number;
     deliveryFeeRevenue: number;
-    totalRevenue: number;
-    riderCost: number;
-    netIncome: number;
+    totalRevenue: number;         // all platform revenue for the period
+    riderCost: number;            // rider payouts made in period
+    overheadExpenses: number;     // overhead expenses in period
+    netIncome: number;            // totalRevenue - riderCost - overheadExpenses
     restaurantPayoutsMade: number;
     riderPayoutsMade: number;
-    restaurantOutstanding: number;
-    riderOutstanding: number;
     orderCount: number;
     riderPayoutCount: number;
-    cashInHand: number;          // COD cash with riders not yet handed to admin
-    codOrderCount: number;
     periodOrderBreakdown: AdminOrderBreakdown[];
+
+    // ── Cumulative since Apr 9 2026 (the "what's in my bank" figures) ─
+    totalOrderCollections: number;    // sum of order.total for all completed orders
+    totalRestaurantPaidLifetime: number;
+    totalRiderPaidLifetime: number;
+    totalOverheadLifetime: number;
+    cashInBank: number;               // collections - rest paid - riders paid - overhead
+    restaurantOutstanding: number;    // still owed to restaurants (cumulative)
+    riderOutstanding: number;         // still owed to riders (cumulative)
+    trueNetPosition: number;          // cashInBank - outstanding
 }
 
 // ─── Stat Card ────────────────────────────────────────────────────────────────
@@ -123,25 +132,27 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
             // Restaurants — for fee fallback + name lookup
             const { data: restaurants } = await supabase
                 .from('restaurants')
-                .select('id, name, platform_fee_per_order, transaction_charge_percent');
-            const restFeeMap: Record<string, number>  = {};
-            const restTxnMap: Record<string, number>  = {};
-            const restNameMap: Record<string, string> = {};
+                .select('id, name, commission_percent, platform_fee_per_order, transaction_charge_percent');
+            const restFeeMap:        Record<string, number>  = {};
+            const restTxnMap:        Record<string, number>  = {};
+            const restCommissionMap: Record<string, number>  = {};
+            const restNameMap:       Record<string, string>  = {};
             restaurants?.forEach(r => {
-                restFeeMap[r.id]  = r.platform_fee_per_order ?? 0;
-                restTxnMap[r.id]  = r.transaction_charge_percent ?? 0;
-                restNameMap[r.id] = r.name ?? '—';
+                restFeeMap[r.id]        = r.platform_fee_per_order ?? 0;
+                restTxnMap[r.id]        = r.transaction_charge_percent ?? 0;
+                restCommissionMap[r.id] = r.commission_percent ?? 0;
+                restNameMap[r.id]       = r.name ?? '—';
             });
 
-            // Orders
+            // Orders — use orders.total / subtotal as authoritative amounts (not recalculated from order_items)
+            // Filter server-side from LEGACY_CUTOFF to end of selected period to avoid hitting the default 1000-row limit
             const { data: orders, error: ordErr } = await supabase
                 .from('orders')
-                .select(`
-                    id, order_number, restaurant_id,
-                    total, delivery_fee, platform_fee, created_at,
-                    order_items(quantity, unit_price, base_price)
-                `)
-                .in('status', ['delivered', 'completed']);
+                .select('id, order_number, restaurant_id, total, subtotal, delivery_fee, platform_fee, created_at')
+                .in('status', ['delivered', 'completed'])
+                .gte('created_at', '2026-04-09T00:00:00.000Z')
+                .lte('created_at', `${dateRange.end}T23:59:59.999Z`)
+                .limit(10000);
             if (ordErr) throw ordErr;
 
             // Deliveries (for rider outstanding only)
@@ -161,51 +172,52 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                 .from('rider_payouts')
                 .select('amount, payout_date, created_at');
 
-            // Cash in hand: COD order totals collected by riders minus what's been handed over
-            const { data: codDeliveries } = await supabase
-                .from('deliveries')
-                .select('orders(total, payment_method, created_at)')
-                .eq('status', 'completed');
 
-            const { data: cashHandovers } = await supabase
-                .from('rider_cash_collections')
-                .select('amount, created_at');
+            // Overhead expenses — period (for P&L) and lifetime (for cash-in-bank)
+            const { data: overheadData } = await supabase
+                .from('overhead_expenses')
+                .select('amount, expense_date')
+                .gte('expense_date', '2026-04-09');  // fetch all since cutoff, filter in JS
 
             const startUTC      = new Date(`${dateRange.start}T00:00:00.000Z`).getTime();
             const endUTC        = new Date(`${dateRange.end}T23:59:59.999Z`).getTime();
             const LEGACY_CUTOFF = new Date('2026-04-09T00:00:00.000Z').getTime();
 
-            // ── Revenue from orders ──────────────────────────────────────────
-            let markupRevenue = 0, restaurantPlatformFeeRevenue = 0, customerPlatformFeeRevenue = 0, transactionFeeRevenue = 0, deliveryFeeRevenue = 0, orderCount = 0;
+            // ── Revenue from orders (all values from orders table only) ─────
+            let commissionRevenue = 0, restaurantPlatformFeeRevenue = 0, customerPlatformFeeRevenue = 0, transactionFeeRevenue = 0, deliveryFeeRevenue = 0, orderCount = 0;
             let restaurantEarnedTotal = 0, restaurantPaidTotal = 0;
+            let totalOrderCollections = 0;
             const periodOrderBreakdown: AdminOrderBreakdown[] = [];
 
             orders?.forEach((o: any) => {
                 const t = new Date(o.created_at).getTime();
                 if (t < LEGACY_CUTOFF) return;
 
-                const baseTotal = (o.order_items?.length > 0)
-                    ? o.order_items.reduce((s: number, i: any) => s + (i.base_price ?? i.unit_price) * i.quantity, 0)
-                    : 0;
-                const unitTotal = (o.order_items?.length > 0)
-                    ? o.order_items.reduce((s: number, i: any) => s + i.unit_price * i.quantity, 0)
-                    : 0;
+                const orderTotal       = Number(o.total || 0);
+                // subtotal = food-only amount (customer price before delivery + platform fee)
+                const subtotal         = Number(o.subtotal || 0) || Math.max(0, orderTotal - Number(o.delivery_fee || 0) - Number(o.platform_fee || 0));
+                const delFee           = Number(o.delivery_fee || 0);
+                const custPlatFee      = Number(o.platform_fee || 0);
+                const restPlatFee      = restFeeMap[o.restaurant_id] ?? 0;
+                const txnPercent       = restTxnMap[o.restaurant_id] ?? 0;
+                const commissionPct    = restCommissionMap[o.restaurant_id] ?? 0;
+                const txnFee           = orderTotal * txnPercent / 100;
+                // Commission = % of food subtotal (consistent with AnalyticsDashboard and payout function)
+                const commission       = subtotal * commissionPct / 100;
 
-                // Two separate platform fees: one from restaurant, one from customer
-                const restPlatFee    = restFeeMap[o.restaurant_id] ?? 0;
-                const custPlatFee    = Number(o.platform_fee || 0);
-                const txnPercent     = restTxnMap[o.restaurant_id] ?? 0;
-                const markup         = unitTotal - baseTotal;
-                const delFee         = Number(o.delivery_fee || 0);
-                // Use DB total; fall back to unitTotal + delivery + customer platform fee
-                const orderTotal     = Number(o.total || unitTotal + delFee + custPlatFee);
-                const txnFee         = orderTotal * txnPercent / 100;
+                // Restaurant's share = subtotal minus commission and restaurant-side fees
+                const restaurantShare  = subtotal - commission - restPlatFee - txnFee;
+                // Platform's total revenue on this order
+                const platformRevenue  = commission + custPlatFee + restPlatFee + txnFee + delFee;
 
-                // Restaurant outstanding uses only restaurant-side deductions
-                if (t <= endUTC) restaurantEarnedTotal += (baseTotal - restPlatFee - txnFee);
+                // All orders treated as cash in hand (regardless of payment method)
+                if (t <= endUTC) totalOrderCollections += orderTotal;
+
+                // Restaurant outstanding — cumulative up to end of selected period
+                if (t <= endUTC) restaurantEarnedTotal += Math.max(0, restaurantShare);
 
                 if (t >= startUTC && t <= endUTC) {
-                    markupRevenue                += markup;
+                    commissionRevenue            += commission;
                     restaurantPlatformFeeRevenue += restPlatFee;
                     customerPlatformFeeRevenue   += custPlatFee;
                     transactionFeeRevenue        += txnFee;
@@ -217,12 +229,13 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                         created_at:         o.created_at,
                         restaurantName:     restNameMap[o.restaurant_id] ?? '—',
                         orderTotal,
-                        markup,
+                        commission,
                         customerPlatformFee: custPlatFee,
                         platformFee:         restPlatFee,
                         transactionFee:      txnFee,
                         deliveryFee:         delFee,
-                        totalRevenue:        markup + restPlatFee + custPlatFee + txnFee + delFee,
+                        restaurantShare,
+                        platformRevenue,
                     });
                 }
             });
@@ -257,36 +270,51 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                 if (t >= startUTC && t <= endUTC) { riderPayoutsMade += Number(p.amount || 0); riderPayoutCount++; }
             });
 
-            // ── Cash in hand (COD orders not yet remitted) ───────────────────
-            let totalCODCollected = 0, codOrderCount = 0;
-            codDeliveries?.forEach((d: any) => {
-                const order = d.orders;
-                if (!order || order.payment_method !== 'cash') return;
-                const t = new Date(order.created_at).getTime();
-                if (t < LEGACY_CUTOFF) return;
-                totalCODCollected += Number(order.total || 0);
-                codOrderCount++;
+            // ── Overhead: split period vs lifetime ───────────────────────────
+            const PERIOD_START = `${dateRange.start}`;
+            const PERIOD_END   = `${dateRange.end}`;
+            let overheadExpenses = 0, totalOverheadLifetime = 0;
+            (overheadData ?? []).forEach((e: any) => {
+                const amt = Number(e.amount || 0);
+                totalOverheadLifetime += amt;
+                if (e.expense_date >= PERIOD_START && e.expense_date <= PERIOD_END) {
+                    overheadExpenses += amt;
+                }
             });
-            const totalCashHandedOver = (cashHandovers || []).reduce((s: number, c: any) => {
-                const t = new Date(c.created_at).getTime();
-                return t >= LEGACY_CUTOFF ? s + Number(c.amount || 0) : s;
-            }, 0);
-            const cashInHand = Math.max(0, totalCODCollected - totalCashHandedOver);
 
+            // ── Period P&L ───────────────────────────────────────────────────
             const riderCost             = riderPayoutsMade;
-            const totalRevenue          = markupRevenue + restaurantPlatformFeeRevenue + customerPlatformFeeRevenue + transactionFeeRevenue + deliveryFeeRevenue;
-            const netIncome             = totalRevenue - riderCost;
+            const totalRevenue          = commissionRevenue + restaurantPlatformFeeRevenue + customerPlatformFeeRevenue + transactionFeeRevenue + deliveryFeeRevenue;
+            const netIncome             = totalRevenue - riderCost - overheadExpenses;
+
+            // ── Cumulative outstanding (since cutoff, up to end of period) ───
             const restaurantOutstanding = Math.max(0, restaurantEarnedTotal - restaurantPaidTotal);
             const riderOutstanding      = Math.max(0, riderEarnedTotal - riderPaidTotal);
 
+            // ── Cash in bank ─────────────────────────────────────────────────
+            // All order payments (online + COD) are treated as cash in hand.
+            // cashInBank = total order collections − all payouts made
+            const cashInBank = totalOrderCollections
+                             - restaurantPaidTotal - riderPaidTotal - totalOverheadLifetime;
+
+            // ── True net position (after settling all outstanding) ───────────
+            const trueNetPosition = cashInBank - restaurantOutstanding - riderOutstanding;
+
             setStats({
-                markupRevenue, restaurantPlatformFeeRevenue, customerPlatformFeeRevenue, transactionFeeRevenue, deliveryFeeRevenue, totalRevenue,
-                riderCost, netIncome,
+                // period
+                commissionRevenue, restaurantPlatformFeeRevenue, customerPlatformFeeRevenue, transactionFeeRevenue, deliveryFeeRevenue, totalRevenue,
+                riderCost, overheadExpenses, netIncome,
                 restaurantPayoutsMade, riderPayoutsMade,
-                restaurantOutstanding, riderOutstanding,
                 orderCount, riderPayoutCount,
-                cashInHand, codOrderCount,
                 periodOrderBreakdown,
+                // cumulative
+                totalOrderCollections,
+                totalRestaurantPaidLifetime: restaurantPaidTotal,
+                totalRiderPaidLifetime:      riderPaidTotal,
+                totalOverheadLifetime,
+                cashInBank,
+                restaurantOutstanding, riderOutstanding,
+                trueNetPosition,
             });
         } catch (err) {
             console.error('Error fetching admin stats:', err);
@@ -327,15 +355,15 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
             // Summary strip
             y = 38;
             const summaryItems = [
-                { label: 'Orders',          val: stats.orderCount.toString() },
-                { label: 'Gross Revenue',   val: fmt(stats.totalRevenue) },
-                { label: 'Markup',          val: fmt(stats.markupRevenue) },
-                { label: 'Cust.Plat.Fee',  val: fmt(stats.customerPlatformFeeRevenue) },
-                { label: 'Rest.Plat.Fee',  val: fmt(stats.restaurantPlatformFeeRevenue) },
-                { label: 'Txn Charges',     val: fmt(stats.transactionFeeRevenue) },
-                { label: 'Delivery Fees',   val: fmt(stats.deliveryFeeRevenue) },
-                { label: 'Paid to Riders',  val: fmt(stats.riderCost) },
-                { label: 'Net Income',      val: fmt(stats.netIncome) },
+                { label: 'Orders',           val: stats.orderCount.toString() },
+                { label: 'Gross Revenue',    val: fmt(stats.totalRevenue) },
+                { label: 'Paid to Riders',   val: fmt(stats.riderCost) },
+                { label: 'Overhead',         val: fmt(stats.overheadExpenses) },
+                { label: 'Net Income',       val: fmt(stats.netIncome) },
+                { label: 'Order Collections',val: fmt(stats.totalOrderCollections) },
+                { label: 'Cash in Bank',     val: fmt(stats.cashInBank) },
+                { label: 'Owed to Others',   val: fmt(stats.restaurantOutstanding + stats.riderOutstanding) },
+                { label: 'True Net Pos.',    val: fmt(stats.trueNetPosition) },
             ];
             pdf.setFontSize(7.5);
             summaryItems.forEach((s, i) => {
@@ -352,7 +380,7 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
 
             // Table
             // Landscape A4 = 297mm, usable 14–283
-            const COL = { num: 14, date: 20, order: 44, rest: 65, orderTotal: 100, markup: 122, custPlat: 141, restPlat: 161, txnFee: 181, delFee: 200, total: 220 };
+            const COL = { num: 14, date: 20, order: 40, rest: 62, orderTotal: 97, commission: 116, custPlat: 135, restPlat: 153, txnFee: 171, delFee: 188, restShare: 206, total: 225 };
 
             const drawHeader = () => {
                 pdf.setFillColor(241, 245, 249);
@@ -360,17 +388,18 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                 pdf.setFont('helvetica', 'bold');
                 pdf.setFontSize(6.5);
                 pdf.setTextColor(71, 85, 105);
-                pdf.text('#',             COL.num,        y);
-                pdf.text('Date',          COL.date,       y);
-                pdf.text('Order #',       COL.order,      y);
-                pdf.text('Restaurant',    COL.rest,       y);
-                pdf.text('Ord.Total',     COL.orderTotal, y);
-                pdf.text('Markup',        COL.markup,     y);
-                pdf.text('Cust.Plat',     COL.custPlat,   y);
-                pdf.text('Rest.Plat',     COL.restPlat,   y);
-                pdf.text('Txn Fee',       COL.txnFee,     y);
-                pdf.text('Del.Fee',       COL.delFee,     y);
-                pdf.text('Revenue',       COL.total,      y);
+                pdf.text('#',            COL.num,        y);
+                pdf.text('Date',         COL.date,       y);
+                pdf.text('Order #',      COL.order,      y);
+                pdf.text('Restaurant',   COL.rest,       y);
+                pdf.text('Ord.Total',    COL.orderTotal, y);
+                pdf.text('Commission',   COL.commission, y);
+                pdf.text('Cust.Plat',    COL.custPlat,   y);
+                pdf.text('Rest.Plat',    COL.restPlat,   y);
+                pdf.text('Txn Fee',      COL.txnFee,     y);
+                pdf.text('Del.Fee',      COL.delFee,     y);
+                pdf.text('Rest.Share',   COL.restShare,  y);
+                pdf.text('Plat.Rev',     COL.total,      y);
                 y += 7;
             };
 
@@ -396,17 +425,21 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                 pdf.text(restName, COL.rest, y);
 
                 pdf.setTextColor(71, 85, 105);
-                pdf.text(`Rs.${o.orderTotal.toFixed(2)}`,    COL.orderTotal, y);
+                pdf.text(`Rs.${o.orderTotal.toFixed(2)}`, COL.orderTotal, y);
 
                 pdf.setTextColor(22, 163, 74);
-                pdf.text(`Rs.${o.markup.toFixed(2)}`,        COL.markup,   y);
-                pdf.text(o.customerPlatformFee > 0 ? `Rs.${o.customerPlatformFee.toFixed(2)}` : '—', COL.custPlat, y);
-                pdf.text(o.platformFee   > 0 ? `Rs.${o.platformFee.toFixed(2)}`   : '—', COL.restPlat, y);
-                pdf.text(o.transactionFee > 0 ? `Rs.${o.transactionFee.toFixed(2)}` : '—', COL.txnFee, y);
-                pdf.text(o.deliveryFee   > 0 ? `Rs.${o.deliveryFee.toFixed(2)}`   : '—', COL.delFee,  y);
+                pdf.text(`Rs.${o.commission.toFixed(2)}`,                                                              COL.commission, y);
+                pdf.text(o.customerPlatformFee > 0 ? `Rs.${o.customerPlatformFee.toFixed(2)}` : '—',                  COL.custPlat,   y);
+                pdf.text(o.platformFee         > 0 ? `Rs.${o.platformFee.toFixed(2)}`         : '—',                  COL.restPlat,   y);
+                pdf.text(o.transactionFee      > 0 ? `Rs.${o.transactionFee.toFixed(2)}`      : '—',                  COL.txnFee,     y);
+                pdf.text(o.deliveryFee         > 0 ? `Rs.${o.deliveryFee.toFixed(2)}`         : '—',                  COL.delFee,     y);
+
+                pdf.setTextColor(71, 85, 105);
+                pdf.text(`Rs.${o.restaurantShare.toFixed(2)}`, COL.restShare, y);
 
                 pdf.setFont('helvetica', 'bold');
-                pdf.text(`Rs.${o.totalRevenue.toFixed(2)}`, COL.total, y);
+                pdf.setTextColor(30, 30, 30);
+                pdf.text(`Rs.${o.platformRevenue.toFixed(2)}`, COL.total, y);
                 pdf.setFont('helvetica', 'normal');
 
                 pdf.setTextColor(30, 30, 30);
@@ -427,17 +460,18 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
             pdf.setFont('helvetica', 'bold');
             pdf.setFontSize(7);
             pdf.setTextColor(255, 255, 255);
-            pdf.text('TOTAL',                                                                                          COL.rest,       y);
-            pdf.text(`Rs.${stats.periodOrderBreakdown.reduce((s, o) => s + o.orderTotal, 0).toFixed(2)}`,             COL.orderTotal, y);
-            pdf.text(`Rs.${stats.markupRevenue.toFixed(2)}`,                                                          COL.markup,     y);
-            pdf.text(`Rs.${stats.customerPlatformFeeRevenue.toFixed(2)}`,                                             COL.custPlat,   y);
-            pdf.text(`Rs.${stats.restaurantPlatformFeeRevenue.toFixed(2)}`,                                           COL.restPlat,   y);
-            pdf.text(`Rs.${stats.transactionFeeRevenue.toFixed(2)}`,                                                  COL.txnFee,     y);
-            pdf.text(`Rs.${stats.deliveryFeeRevenue.toFixed(2)}`,                                                     COL.delFee,     y);
-            pdf.text(`Rs.${stats.totalRevenue.toFixed(2)}`,                                                           COL.total,      y);
+            pdf.text('TOTAL',                                                                                                        COL.rest,       y);
+            pdf.text(`Rs.${stats.periodOrderBreakdown.reduce((s, o) => s + o.orderTotal, 0).toFixed(2)}`,                       COL.orderTotal, y);
+            pdf.text(`Rs.${stats.commissionRevenue.toFixed(2)}`,                                                                 COL.commission, y);
+            pdf.text(`Rs.${stats.customerPlatformFeeRevenue.toFixed(2)}`,                                                        COL.custPlat,   y);
+            pdf.text(`Rs.${stats.restaurantPlatformFeeRevenue.toFixed(2)}`,                                                      COL.restPlat,   y);
+            pdf.text(`Rs.${stats.transactionFeeRevenue.toFixed(2)}`,                                                             COL.txnFee,     y);
+            pdf.text(`Rs.${stats.deliveryFeeRevenue.toFixed(2)}`,                                                                COL.delFee,     y);
+            pdf.text(`Rs.${stats.periodOrderBreakdown.reduce((s, o) => s + o.restaurantShare, 0).toFixed(2)}`,                  COL.restShare,  y);
+            pdf.text(`Rs.${stats.totalRevenue.toFixed(2)}`,                                                                      COL.total,      y);
             y += 12;
 
-            // Rider payments note
+            // Notes
             pdf.setFont('helvetica', 'normal');
             pdf.setFontSize(8);
             pdf.setTextColor(100, 100, 100);
@@ -445,10 +479,12 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                 `Note: Rider payments (${fmt(stats.riderCost)} across ${stats.riderPayoutCount} payment${stats.riderPayoutCount !== 1 ? 's' : ''}) are lump-sum daily settlements and are not per-order.`,
                 14, y
             );
+            y += 5;
+            pdf.text(`Overhead Expenses (period): ${fmt(stats.overheadExpenses)}   |   Net Income (period): ${fmt(stats.netIncome)}`, 14, y);
             y += 6;
             pdf.setFont('helvetica', 'bold');
             pdf.setTextColor(0, 0, 0);
-            pdf.text(`Net Income (Revenue − Rider Payments): ${fmt(stats.netIncome)}`, 14, y);
+            pdf.text(`Order Collections: ${fmt(stats.totalOrderCollections)}   |   Cash in Bank: ${fmt(stats.cashInBank)}   |   True Net Position: ${fmt(stats.trueNetPosition)}`, 14, y);
 
             // Page footers
             const pages = (pdf as any).internal.getNumberOfPages();
@@ -476,18 +512,108 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
     );
     if (!stats) return null;
 
-    const cashPosition = stats.netIncome - stats.restaurantOutstanding - stats.riderOutstanding;
-
     return (
         <div className="space-y-8">
 
-            {/* ── KPI cards ────────────────────────────────────────────────── */}
-            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-                <StatCard label="Gross Revenue"  value={fmt(stats.totalRevenue)} sub={`${stats.orderCount} orders`}                                                   color="green"  icon={<TrendingUp size={18} />}   />
-                <StatCard label="Paid to Riders" value={fmt(stats.riderCost)}    sub={`${stats.riderPayoutCount} payment${stats.riderPayoutCount !== 1 ? 's' : ''}`}  color="red"    icon={<Bike size={18} />}          />
-                <StatCard label="Net Income"      value={fmt(stats.netIncome)}    sub="Revenue minus rider payments"                                                   color={stats.netIncome  >= 0 ? 'orange' : 'red'} icon={<IndianRupee size={18} />} />
-                <StatCard label="Cash Position"  value={fmt(cashPosition)}       sub="After all outstanding payables"                                                 color={cashPosition >= 0 ? 'blue' : 'red'}       icon={<Wallet size={18} />}      />
-                <StatCard label="Cash in Hand"   value={fmt(stats.cashInHand)}   sub={`${stats.codOrderCount} COD order${stats.codOrderCount !== 1 ? 's' : ''} · with riders`} color={stats.cashInHand > 0 ? 'purple' : 'slate'} icon={<Banknote size={18} />} />
+            {/* ── Cash Flow Statement ───────────────────────────────────────── */}
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-2">
+                    <Wallet size={16} className="text-blue-500" />
+                    <h3 className="font-bold text-slate-800">Cash Flow Statement</h3>
+                    <span className="ml-2 text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full font-medium">Cumulative from 9 Apr 2026</span>
+                    <span className="ml-auto text-xs text-slate-400 italic">All order payments treated as cash in hand</span>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-slate-100">
+
+                    {/* Money In */}
+                    <div className="p-6">
+                        <p className="text-xs font-bold text-emerald-600 uppercase tracking-widest mb-4">Money Received</p>
+                        <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <p className="text-sm font-semibold text-slate-700">Order collections</p>
+                                    <p className="text-xs text-slate-400">Total value of all completed orders (online + COD) since Apr 9, 2026</p>
+                                </div>
+                                <span className="font-bold text-emerald-600 text-sm">+{fmt(stats.totalOrderCollections)}</span>
+                            </div>
+                            <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                                <span className="font-bold text-slate-800">Total received</span>
+                                <span className="font-bold text-emerald-700 text-lg">{fmt(stats.totalOrderCollections)}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Money Out */}
+                    <div className="p-6">
+                        <p className="text-xs font-bold text-red-500 uppercase tracking-widest mb-4">Money Paid Out</p>
+                        <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <p className="text-sm font-semibold text-slate-700">To restaurants</p>
+                                    <p className="text-xs text-slate-400">All restaurant payouts since Apr 9, 2026</p>
+                                </div>
+                                <span className="font-bold text-red-500 text-sm">−{fmt(stats.totalRestaurantPaidLifetime)}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <p className="text-sm font-semibold text-slate-700">To riders</p>
+                                    <p className="text-xs text-slate-400">All rider payouts since Apr 9, 2026</p>
+                                </div>
+                                <span className="font-bold text-red-500 text-sm">−{fmt(stats.totalRiderPaidLifetime)}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <p className="text-sm font-semibold text-slate-700">Overhead expenses</p>
+                                    <p className="text-xs text-slate-400">All operational costs since Apr 9, 2026</p>
+                                </div>
+                                <span className="font-bold text-red-500 text-sm">−{fmt(stats.totalOverheadLifetime)}</span>
+                            </div>
+                            <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                                <span className="font-bold text-slate-800">Total paid out</span>
+                                <span className="font-bold text-red-600 text-lg">
+                                    {fmt(stats.totalRestaurantPaidLifetime + stats.totalRiderPaidLifetime + stats.totalOverheadLifetime)}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Cash in Bank — the headline number */}
+                <div className={`mx-6 mb-6 rounded-xl p-5 border-2 ${stats.cashInBank >= 0 ? 'bg-blue-50 border-blue-200' : 'bg-red-50 border-red-200'}`}>
+                    <div className="flex items-center justify-between flex-wrap gap-3">
+                        <div>
+                            <p className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-0.5">Cash in Your Bank Right Now</p>
+                            <p className={`text-4xl font-bold ${stats.cashInBank >= 0 ? 'text-blue-700' : 'text-red-700'}`}>{fmt(stats.cashInBank)}</p>
+                            <p className="text-xs text-slate-400 mt-1">
+                                {fmt(stats.totalOrderCollections)} collected
+                                &nbsp;−&nbsp;{fmt(stats.totalRestaurantPaidLifetime + stats.totalRiderPaidLifetime + stats.totalOverheadLifetime)} paid out
+                            </p>
+                        </div>
+                        <div className="space-y-2 text-sm min-w-[260px]">
+                            <div className="flex items-center justify-between gap-8">
+                                <span className="text-slate-500 flex items-center gap-1.5"><Store size={13} className="text-amber-400" /> Still owed to restaurants</span>
+                                <span className="font-semibold text-amber-600">−{fmt(stats.restaurantOutstanding)}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-8">
+                                <span className="text-slate-500 flex items-center gap-1.5"><Bike size={13} className="text-amber-400" /> Still owed to riders</span>
+                                <span className="font-semibold text-amber-600">−{fmt(stats.riderOutstanding)}</span>
+                            </div>
+                            <div className={`flex items-center justify-between gap-8 pt-2 border-t ${stats.trueNetPosition >= 0 ? 'border-blue-200' : 'border-red-200'}`}>
+                                <span className="font-bold text-slate-700">True net position</span>
+                                <span className={`font-bold text-base ${stats.trueNetPosition >= 0 ? 'text-blue-700' : 'text-red-600'}`}>{fmt(stats.trueNetPosition)}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* ── KPI cards (period) ────────────────────────────────────────── */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <StatCard label="Gross Revenue"   value={fmt(stats.totalRevenue)}    sub={`${stats.orderCount} orders · period`}                                                         color="green"  icon={<TrendingUp size={18} />}   />
+                <StatCard label="Paid to Riders"  value={fmt(stats.riderCost)}       sub={`${stats.riderPayoutCount} payment${stats.riderPayoutCount !== 1 ? 's' : ''} · period`}       color="red"    icon={<Bike size={18} />}          />
+                <StatCard label="Overhead"         value={fmt(stats.overheadExpenses)} sub="Operational expenses · period"                                                                color="red"    icon={<Receipt size={18} />}       />
+                <StatCard label="Net Income"       value={fmt(stats.netIncome)}       sub="Revenue − riders − overhead · period"                                                          color={stats.netIncome >= 0 ? 'orange' : 'red'} icon={<IndianRupee size={18} />} />
             </div>
 
             {/* ── Revenue breakdown + Outstanding ──────────────────────────── */}
@@ -500,16 +626,17 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                         <span className="ml-auto text-xs text-slate-400">Period</span>
                     </div>
                     <div className="divide-y divide-slate-50">
-                        <RevenueRow label="Food Markup (Commission)"        description="Unit price charged to customer minus base price paid to restaurant"  amount={stats.markupRevenue}                   positive />
+                        <RevenueRow label="Commission"                      description="commission_percent % of food subtotal per restaurant"             amount={stats.commissionRevenue}               positive />
                         <RevenueRow label="Platform Fee (from Customer)"    description="Platform/service fee charged to customer on each order"           amount={stats.customerPlatformFeeRevenue}      positive />
-                        <RevenueRow label="Platform Fee (from Restaurant)"  description="Per-order flat fee deducted from restaurant payables"              amount={stats.restaurantPlatformFeeRevenue}    positive />
-                        <RevenueRow label="Transaction Charges"             description="% of order total charged to restaurants per their fee schedule"    amount={stats.transactionFeeRevenue}          positive />
-                        <RevenueRow label="Delivery Fees Collected"         description="Delivery charges paid by customers"                               amount={stats.deliveryFeeRevenue}             positive />
+                        <RevenueRow label="Platform Fee (from Restaurant)"  description="Per-order flat fee deducted from restaurant payables"             amount={stats.restaurantPlatformFeeRevenue}    positive />
+                        <RevenueRow label="Transaction Charges"             description="% of order total charged to restaurants per their fee schedule"   amount={stats.transactionFeeRevenue}           positive />
+                        <RevenueRow label="Delivery Fees Collected"         description="Delivery charges paid by customers"                              amount={stats.deliveryFeeRevenue}              positive />
                         <div className="px-6 py-4 flex items-center justify-between bg-slate-50">
                             <span className="font-bold text-slate-800">Total Revenue</span>
                             <span className="font-bold text-emerald-600 text-lg">{fmt(stats.totalRevenue)}</span>
                         </div>
-                        <RevenueRow label="Paid to Riders" description="Actual payments made to riders in this period" amount={stats.riderCost} positive={false} />
+                        <RevenueRow label="Paid to Riders"    description="Actual payments made to riders in this period"                amount={stats.riderCost}         positive={false} />
+                        <RevenueRow label="Overhead Expenses" description="Operational costs recorded in the Overhead tab — this period" amount={stats.overheadExpenses}  positive={false} />
                         <div className="px-6 py-4 flex items-center justify-between bg-orange-50">
                             <span className="font-bold text-slate-800">Net Income</span>
                             <span className={`font-bold text-lg ${stats.netIncome >= 0 ? 'text-orange-600' : 'text-red-600'}`}>{fmt(stats.netIncome)}</span>
@@ -548,14 +675,6 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                                 <span className="font-bold text-red-600">{fmt(stats.restaurantOutstanding + stats.riderOutstanding)}</span>
                             </div>
                         </div>
-                    </div>
-
-                    <div className={`rounded-2xl border p-5 ${cashPosition >= 0 ? 'bg-blue-50 border-blue-100' : 'bg-red-50 border-red-100'}`}>
-                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Actual Cash Position</p>
-                        <p className={`text-3xl font-bold ${cashPosition >= 0 ? 'text-blue-700' : 'text-red-700'}`}>{fmt(cashPosition)}</p>
-                        <p className="text-xs text-slate-400 mt-2">
-                            Net income {fmt(stats.netIncome)} minus outstanding restaurant ({fmt(stats.restaurantOutstanding)}) and rider ({fmt(stats.riderOutstanding)}) payables
-                        </p>
                     </div>
                 </div>
             </div>
@@ -601,12 +720,13 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                                             <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">Order #</th>
                                             <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">Restaurant</th>
                                             <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Order Total</th>
-                                            <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Markup</th>
+                                            <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Commission</th>
                                             <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Cust. Plat.</th>
                                             <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Rest. Plat.</th>
                                             <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Txn Fee</th>
                                             <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Del. Fee</th>
-                                            <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Revenue</th>
+                                            <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Rest. Share</th>
+                                            <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Plat. Rev.</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-50">
@@ -617,7 +737,7 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                                                 <td className="px-4 py-2.5 font-mono font-semibold text-slate-800">#{o.order_number}</td>
                                                 <td className="px-4 py-2.5 text-slate-700 max-w-[160px] truncate">{o.restaurantName}</td>
                                                 <td className="px-4 py-2.5 text-right text-slate-600 font-medium">₹{o.orderTotal.toFixed(2)}</td>
-                                                <td className="px-4 py-2.5 text-right text-emerald-600 font-medium">₹{o.markup.toFixed(2)}</td>
+                                                <td className="px-4 py-2.5 text-right text-emerald-600 font-medium">₹{o.commission.toFixed(2)}</td>
                                                 <td className="px-4 py-2.5 text-right text-emerald-600 font-medium">
                                                     {o.customerPlatformFee > 0 ? `₹${o.customerPlatformFee.toFixed(2)}` : <span className="text-slate-300">—</span>}
                                                 </td>
@@ -630,7 +750,8 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                                                 <td className="px-4 py-2.5 text-right text-emerald-600 font-medium">
                                                     {o.deliveryFee > 0 ? `₹${o.deliveryFee.toFixed(2)}` : <span className="text-slate-300">—</span>}
                                                 </td>
-                                                <td className="px-4 py-2.5 text-right font-bold text-slate-900">₹{o.totalRevenue.toFixed(2)}</td>
+                                                <td className="px-4 py-2.5 text-right text-slate-500 font-medium">₹{o.restaurantShare.toFixed(2)}</td>
+                                                <td className="px-4 py-2.5 text-right font-bold text-slate-900">₹{o.platformRevenue.toFixed(2)}</td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -640,11 +761,14 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                                             <td className="px-4 py-3 text-right font-bold text-slate-600">
                                                 ₹{stats.periodOrderBreakdown.reduce((s, o) => s + o.orderTotal, 0).toFixed(2)}
                                             </td>
-                                            <td className="px-4 py-3 text-right font-bold text-emerald-600">₹{stats.markupRevenue.toFixed(2)}</td>
+                                            <td className="px-4 py-3 text-right font-bold text-emerald-600">₹{stats.commissionRevenue.toFixed(2)}</td>
                                             <td className="px-4 py-3 text-right font-bold text-emerald-600">₹{stats.customerPlatformFeeRevenue.toFixed(2)}</td>
                                             <td className="px-4 py-3 text-right font-bold text-emerald-600">₹{stats.restaurantPlatformFeeRevenue.toFixed(2)}</td>
                                             <td className="px-4 py-3 text-right font-bold text-emerald-600">₹{stats.transactionFeeRevenue.toFixed(2)}</td>
                                             <td className="px-4 py-3 text-right font-bold text-emerald-600">₹{stats.deliveryFeeRevenue.toFixed(2)}</td>
+                                            <td className="px-4 py-3 text-right font-bold text-slate-500">
+                                                ₹{stats.periodOrderBreakdown.reduce((s, o) => s + o.restaurantShare, 0).toFixed(2)}
+                                            </td>
                                             <td className="px-4 py-3 text-right font-bold text-orange-600 text-base">₹{stats.totalRevenue.toFixed(2)}</td>
                                         </tr>
                                     </tfoot>
@@ -658,7 +782,7 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                                 <span className="font-semibold text-slate-600">Rider payments:</span> {fmt(stats.riderCost)} across {stats.riderPayoutCount} payment{stats.riderPayoutCount !== 1 ? 's' : ''} — lump-sum daily settlements, not per-order.
                             </span>
                             <span className="font-semibold text-slate-700">
-                                Net Income = {fmt(stats.totalRevenue)} − {fmt(stats.riderCost)} = {fmt(stats.netIncome)}
+                                Fee Revenue = {fmt(stats.totalRevenue)} &nbsp;·&nbsp; Net Income = {fmt(stats.totalRevenue)} − {fmt(stats.riderCost)} − {fmt(stats.overheadExpenses)} = {fmt(stats.netIncome)}
                             </span>
                         </div>
                     </>

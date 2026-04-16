@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { Trash2, Plus, Pencil, Tag } from 'lucide-react';
+import { Trash2, Plus, Pencil, Tag, User, X } from 'lucide-react';
 
 export default function CouponsManager() {
     const [coupons, setCoupons] = useState<any[]>([]);
@@ -23,6 +23,14 @@ export default function CouponsManager() {
     const [maxDiscountValue, setMaxDiscountValue] = useState('');
     const [isActive, setIsActive] = useState(true);
     const [selectedCityId, setSelectedCityId] = useState<string>('');
+    const [firstOrderOnly, setFirstOrderOnly] = useState(false);
+
+    // User assignment state
+    const [assignedUser, setAssignedUser] = useState<{ id: string; full_name: string; phone: string } | null>(null);
+    const [userSearchQuery, setUserSearchQuery] = useState('');
+    const [userSearchResults, setUserSearchResults] = useState<any[]>([]);
+    const [userSearchLoading, setUserSearchLoading] = useState(false);
+    const searchTimeout = useRef<NodeJS.Timeout | null>(null);
 
     useEffect(() => {
         fetchCoupons();
@@ -35,12 +43,23 @@ export default function CouponsManager() {
     };
 
     const fetchCoupons = async () => {
-        const { data, error } = await supabase
-            .from('coupons')
-            .select('*, city:cities(id, name)')
-            .order('created_at', { ascending: false });
-        if (!error && data) setCoupons(data);
+        const res = await fetch('/api/coupons');
+        const data = await res.json();
+        if (Array.isArray(data)) setCoupons(data);
         setLoading(false);
+    };
+
+    const searchUsers = async (query: string) => {
+        if (!query.trim()) { setUserSearchResults([]); return; }
+        setUserSearchLoading(true);
+        const { data } = await supabase
+            .from('profiles')
+            .select('id, full_name, phone')
+            .eq('role', 'customer')
+            .or(`full_name.ilike.%${query}%,phone.ilike.%${query}%`)
+            .limit(8);
+        setUserSearchResults(data || []);
+        setUserSearchLoading(false);
     };
 
     const handleEdit = (coupon: any) => {
@@ -52,6 +71,10 @@ export default function CouponsManager() {
         setMaxDiscountValue(coupon.max_discount_value?.toString() || '');
         setIsActive(coupon.is_active);
         setSelectedCityId(coupon.city_id || '');
+        setFirstOrderOnly(coupon.first_order_only || false);
+        setAssignedUser(coupon.user || null);
+        setUserSearchQuery('');
+        setUserSearchResults([]);
         setIsModalOpen(true);
     };
 
@@ -64,6 +87,10 @@ export default function CouponsManager() {
         setMaxDiscountValue('');
         setIsActive(true);
         setSelectedCityId('');
+        setFirstOrderOnly(false);
+        setAssignedUser(null);
+        setUserSearchQuery('');
+        setUserSearchResults([]);
         setIsModalOpen(false);
     };
 
@@ -79,7 +106,9 @@ export default function CouponsManager() {
                 min_order_value: minOrderValue ? parseFloat(minOrderValue) : 0,
                 max_discount_value: maxDiscountValue ? parseFloat(maxDiscountValue) : null,
                 is_active: isActive,
-                city_id: selectedCityId || null
+                city_id: selectedCityId || null,
+                user_id: assignedUser?.id || null,
+                first_order_only: firstOrderOnly,
             };
 
             // If editing and code changed (not possible with PK, so we usually delete old or just block PK edit)
@@ -87,8 +116,13 @@ export default function CouponsManager() {
             // BUT if user changes code, strict upsert creates NEW.
             // For simplicity, we disable editing CODE if in edit mode.
 
-            const { error } = await supabase.from('coupons').upsert(payload);
-            if (error) throw error;
+            const res = await fetch('/api/coupons', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const result = await res.json();
+            if (!res.ok) throw new Error(result.error);
 
             alert('Coupon Saved!');
             resetForms();
@@ -102,27 +136,47 @@ export default function CouponsManager() {
 
     const handleDelete = async (code: string) => {
         if (!confirm('Delete this coupon?')) return;
-        await supabase.from('coupons').delete().eq('code', code);
+        await fetch('/api/coupons', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code }),
+        });
         fetchCoupons();
     };
 
+    const [selectedUserFilter, setSelectedUserFilter] = useState<'all' | 'public' | 'user'>('all');
+
     if (loading) return <div className="p-8">Loading...</div>;
 
-    const filteredCoupons = selectedCityFilter === 'all'
+    const filteredCoupons = (selectedCityFilter === 'all'
         ? coupons
-        : coupons.filter(c => c.city_id === selectedCityFilter);
+        : coupons.filter(c => c.city_id === selectedCityFilter))
+        .filter(c => selectedUserFilter === 'all'
+            ? true
+            : selectedUserFilter === 'user' ? !!c.user_id : !c.user_id);
 
     return (
         <div className="space-y-6">
-            <div className="flex justify-between items-center">
-                <h2 className="text-xl font-bold">Active Coupons</h2>
-                <div className="flex items-center gap-4">
+            <div className="flex justify-between items-center flex-wrap gap-3">
+                <h2 className="text-xl font-bold">Coupons
+                    <span className="ml-2 text-sm font-normal text-slate-500">({filteredCoupons.length})</span>
+                </h2>
+                <div className="flex items-center gap-3 flex-wrap">
+                    <select
+                        value={selectedUserFilter}
+                        onChange={e => setSelectedUserFilter(e.target.value as any)}
+                        className="bg-white border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500"
+                    >
+                        <option value="all">All Types</option>
+                        <option value="public">Public only</option>
+                        <option value="user">User-specific only</option>
+                    </select>
                     <select
                         value={selectedCityFilter}
                         onChange={e => setSelectedCityFilter(e.target.value)}
                         className="bg-white border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 max-w-[200px]"
                     >
-                        <option value="all">Global / All Cities</option>
+                        <option value="all">All Cities</option>
                         {cities.map(c => (
                             <option key={c.id} value={c.id}>{c.name}</option>
                         ))}
@@ -154,8 +208,22 @@ export default function CouponsManager() {
                                 {coupon.discount_type === 'percentage' ? `${coupon.discount_value}% OFF` : `₹${coupon.discount_value} OFF`}
                             </div>
                             <div className="flex items-center gap-2 pt-1 border-t border-gray-50 flex-wrap">
-                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${coupon.city ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'}`}>
-                                    {coupon.city ? coupon.city.name : 'Global'}
+                                {coupon.first_order_only && (
+                                    <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-800">
+                                        🎉 First Order
+                                    </span>
+                                )}
+                                {coupon.user ? (
+                                    <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-violet-100 text-violet-800 flex items-center gap-1">
+                                        <User size={10} /> {coupon.user.full_name || coupon.user.phone}
+                                    </span>
+                                ) : (
+                                    <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-purple-100 text-purple-800">
+                                        Public
+                                    </span>
+                                )}
+                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${coupon.city ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'}`}>
+                                    {coupon.city ? coupon.city.name : 'All Cities'}
                                 </span>
                             </div>
                             <div className="text-sm text-gray-500 mt-2">
@@ -255,15 +323,86 @@ export default function CouponsManager() {
                                 </div>
                             </div>
 
-                            <label className="flex items-center gap-2 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={isActive}
-                                    onChange={e => setIsActive(e.target.checked)}
-                                    className="w-5 h-5 rounded text-green-600"
-                                />
-                                <span className="text-gray-900 font-medium">Is Active</span>
-                            </label>
+                            {/* User Assignment */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Assign to Specific User <span className="text-gray-400 font-normal">(optional — leave blank for public)</span>
+                                </label>
+                                {assignedUser ? (
+                                    <div className="flex items-center justify-between bg-violet-50 border border-violet-200 rounded-lg px-3 py-2">
+                                        <div className="flex items-center gap-2">
+                                            <User size={16} className="text-violet-600" />
+                                            <span className="font-medium text-violet-900">{assignedUser.full_name || 'Unknown'}</span>
+                                            <span className="text-violet-500 text-sm">{assignedUser.phone}</span>
+                                        </div>
+                                        <button onClick={() => { setAssignedUser(null); setUserSearchQuery(''); }} className="text-violet-400 hover:text-violet-700">
+                                            <X size={16} />
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="relative">
+                                        <input
+                                            type="text"
+                                            className="w-full p-2 border rounded-lg"
+                                            placeholder="Search by name or phone..."
+                                            value={userSearchQuery}
+                                            onChange={e => {
+                                                setUserSearchQuery(e.target.value);
+                                                if (searchTimeout.current) clearTimeout(searchTimeout.current);
+                                                searchTimeout.current = setTimeout(() => searchUsers(e.target.value), 300);
+                                            }}
+                                        />
+                                        {userSearchLoading && (
+                                            <div className="absolute right-3 top-2.5 text-gray-400 text-xs">Searching...</div>
+                                        )}
+                                        {userSearchResults.length > 0 && (
+                                            <div className="absolute z-10 w-full mt-1 bg-white border rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                                                {userSearchResults.map(u => (
+                                                    <button
+                                                        key={u.id}
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setAssignedUser(u);
+                                                            setUserSearchQuery('');
+                                                            setUserSearchResults([]);
+                                                        }}
+                                                        className="w-full text-left px-3 py-2 hover:bg-violet-50 flex items-center justify-between text-sm"
+                                                    >
+                                                        <span className="font-medium">{u.full_name || 'No name'}</span>
+                                                        <span className="text-gray-400">{u.phone}</span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="flex gap-6">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={isActive}
+                                        onChange={e => setIsActive(e.target.checked)}
+                                        className="w-5 h-5 rounded text-green-600"
+                                    />
+                                    <span className="text-gray-900 font-medium">Is Active</span>
+                                </label>
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={firstOrderOnly}
+                                        onChange={e => setFirstOrderOnly(e.target.checked)}
+                                        className="w-5 h-5 rounded text-violet-600"
+                                    />
+                                    <span className="text-gray-900 font-medium">First Order Only</span>
+                                </label>
+                            </div>
+                            {firstOrderOnly && (
+                                <p className="text-xs text-violet-600 bg-violet-50 rounded-lg px-3 py-2">
+                                    This coupon will only be visible to customers who have never placed an order. It will automatically disappear after their first order.
+                                </p>
+                            )}
 
                             <div className="flex gap-3 pt-4">
                                 <button onClick={resetForms} className="flex-1 py-2 text-gray-600 font-bold hover:bg-gray-100 rounded-lg">Cancel</button>
