@@ -27,6 +27,37 @@ interface PayoutForm {
     date: string; // YYYY-MM-DD — actual date of payment, used for period bucketing
 }
 
+// ── Rider pay structure (new from 2026-04-17) ─────────────────────────────────
+const RIDER_PAY = { dailyFixed: 300, perDelivery: 15, bonus15: 100, bonus20: 150 };
+const NEW_PAY_CUTOFF = '2026-04-17';
+
+function getISTDate(utcString: string) {
+    const istMs = new Date(utcString).getTime() + 5.5 * 60 * 60 * 1000;
+    return new Date(istMs).toISOString().split('T')[0];
+}
+
+function calcEarnings(deliveries: { updated_at: string; delivery_fee: number | null }[]) {
+    // Pre-cutoff: use recorded delivery_fee
+    const legacy = deliveries.filter(d => getISTDate(d.updated_at) < NEW_PAY_CUTOFF);
+    const legacyTotal = legacy.reduce((sum, d) => sum + Number(d.delivery_fee || 0), 0);
+
+    // Post-cutoff: ₹300/day + ₹15/delivery + bonus
+    const newOnes = deliveries.filter(d => getISTDate(d.updated_at) >= NEW_PAY_CUTOFF);
+    const byDay: Record<string, number> = {};
+    newOnes.forEach(d => {
+        const day = getISTDate(d.updated_at);
+        byDay[day] = (byDay[day] || 0) + 1;
+    });
+    const fixed = Object.keys(byDay).length * RIDER_PAY.dailyFixed;
+    const perDelivery = newOnes.length * RIDER_PAY.perDelivery;
+    const bonus = Object.values(byDay).reduce((sum, cnt) => {
+        if (cnt >= 20) return sum + RIDER_PAY.bonus20;
+        if (cnt >= 15) return sum + RIDER_PAY.bonus15;
+        return sum;
+    }, 0);
+    return legacyTotal + fixed + perDelivery + bonus;
+}
+
 export default function ReconciliationRiderTab({ dateRange }: { dateRange: DateRange }) {
     const [riders, setRiders] = useState<RiderStat[]>([]);
     const [loading, setLoading] = useState(true);
@@ -73,14 +104,20 @@ export default function ReconciliationRiderTab({ dateRange }: { dateRange: DateR
                 let paidInPeriod         = 0;
                 const riderHistory: any[] = [];
 
-                deliveries?.forEach(d => {
-                    if (d.rider_id !== rider.id) return;
-                    const fee = Number(d.delivery_fee || 0);
-                    const t   = new Date(d.updated_at).getTime();
-                    if (t < LEGACY_CUTOFF) return;
-                    if (t < startUTC)                    lifetimeEarnedBefore += fee;
-                    else if (t >= startUTC && t <= endUTC) earnedInPeriod       += fee;
+                const riderDeliveries = (deliveries || []).filter(d => {
+                    if (d.rider_id !== rider.id) return false;
+                    const t = new Date(d.updated_at).getTime();
+                    return t >= LEGACY_CUTOFF;
                 });
+                lifetimeEarnedBefore = calcEarnings(
+                    riderDeliveries.filter(d => new Date(d.updated_at).getTime() < startUTC)
+                );
+                earnedInPeriod = calcEarnings(
+                    riderDeliveries.filter(d => {
+                        const t = new Date(d.updated_at).getTime();
+                        return t >= startUTC && t <= endUTC;
+                    })
+                );
 
                 payouts?.forEach(p => {
                     if (p.rider_id !== rider.id) return;

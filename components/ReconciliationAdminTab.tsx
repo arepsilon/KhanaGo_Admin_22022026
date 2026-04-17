@@ -54,6 +54,7 @@ interface AdminStats {
     restaurantOutstanding: number;    // still owed to restaurants (cumulative)
     riderOutstanding: number;         // still owed to riders (cumulative)
     trueNetPosition: number;          // cashInBank - outstanding
+    riderEarningsBreakdown: { fixed: number; perDelivery: number; bonus: number; activeDays: number; deliveryCount: number; legacyTotal: number };
 }
 
 // ─── Stat Card ────────────────────────────────────────────────────────────────
@@ -114,6 +115,43 @@ function PayoutRow({ label, icon, amount, warn = false }: {
     );
 }
 
+// ── Rider pay structure ───────────────────────────────────────────────────────
+const RIDER_PAY = { dailyFixed: 300, perDelivery: 15, bonus15: 100, bonus20: 150 };
+const NEW_PAY_CUTOFF = '2026-04-17'; // new structure applies from this IST date onwards
+
+function getISTDate(utcString: string) {
+    const istMs = new Date(utcString).getTime() + 5.5 * 60 * 60 * 1000;
+    return new Date(istMs).toISOString().split('T')[0];
+}
+
+function calcAllRidersEarnings(deliveries: { updated_at: string; rider_id: string | null; delivery_fee: number | null }[]) {
+    // Pre-cutoff: sum recorded delivery_fee
+    const legacyTotal = deliveries
+        .filter(d => getISTDate(d.updated_at) < NEW_PAY_CUTOFF)
+        .reduce((sum, d) => sum + (d.delivery_fee || 0), 0);
+
+    // Post-cutoff: ₹300/day + ₹15/delivery + bonus, grouped by rider → IST day
+    const newOnes = deliveries.filter(d => d.rider_id && getISTDate(d.updated_at) >= NEW_PAY_CUTOFF);
+    const riderDays: Record<string, Record<string, number>> = {};
+    newOnes.forEach(d => {
+        const dayKey = getISTDate(d.updated_at);
+        if (!riderDays[d.rider_id!]) riderDays[d.rider_id!] = {};
+        riderDays[d.rider_id!][dayKey] = (riderDays[d.rider_id!][dayKey] || 0) + 1;
+    });
+    let fixed = 0, perDelivery = 0, bonus = 0, activeDays = 0;
+    Object.values(riderDays).forEach(days => {
+        Object.values(days).forEach(cnt => {
+            fixed += RIDER_PAY.dailyFixed;
+            perDelivery += cnt * RIDER_PAY.perDelivery;
+            activeDays++;
+            if (cnt >= 20) bonus += RIDER_PAY.bonus20;
+            else if (cnt >= 15) bonus += RIDER_PAY.bonus15;
+        });
+    });
+    const deliveryCount = newOnes.length;
+    return { total: legacyTotal + fixed + perDelivery + bonus, fixed, perDelivery, bonus, activeDays, deliveryCount, legacyTotal };
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateRange }) {
@@ -158,8 +196,10 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
             // Deliveries (for rider outstanding only)
             const { data: deliveries, error: delErr } = await supabase
                 .from('deliveries')
-                .select('delivery_fee, updated_at')
-                .eq('status', 'completed');
+                .select('updated_at, rider_id, delivery_fee')
+                .eq('status', 'completed')
+                .gte('updated_at', '2026-04-09T00:00:00.000Z')
+                .lte('updated_at', `${dateRange.end}T23:59:59.999Z`);
             if (delErr) throw delErr;
 
             // Restaurant payouts
@@ -245,13 +285,14 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                 new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
             );
 
-            // ── Rider earned (outstanding calc) ──────────────────────────────
-            let riderEarnedTotal = 0;
-            deliveries?.forEach(d => {
-                const t = new Date(d.updated_at).getTime();
-                if (t < LEGACY_CUTOFF || t > endUTC) return;
-                riderEarnedTotal += Number(d.delivery_fee || 0);
-            });
+            // ── Rider earned (outstanding calc) — new pay structure ──────────
+            const riderEarningsBreakdown = calcAllRidersEarnings(
+                (deliveries || []).filter(d => {
+                    const t = new Date(d.updated_at).getTime();
+                    return t >= LEGACY_CUTOFF && t <= endUTC;
+                })
+            );
+            const riderEarnedTotal = riderEarningsBreakdown.total;
 
             // ── Payouts ───────────────────────────────────────────────────────
             let restaurantPayoutsMade = 0;
@@ -315,6 +356,7 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                 cashInBank,
                 restaurantOutstanding, riderOutstanding,
                 trueNetPosition,
+                riderEarningsBreakdown,
             });
         } catch (err) {
             console.error('Error fetching admin stats:', err);
@@ -669,7 +711,37 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                         </div>
                         <div className="divide-y divide-slate-50">
                             <PayoutRow label="Still owed to Restaurants" icon={<Store size={14} />} amount={stats.restaurantOutstanding} warn={stats.restaurantOutstanding > 0} />
-                            <PayoutRow label="Still owed to Riders"      icon={<Bike size={14} />}  amount={stats.riderOutstanding}      warn={stats.riderOutstanding > 0} />
+                            <div>
+                                <PayoutRow label="Still owed to Riders" icon={<Bike size={14} />} amount={stats.riderOutstanding} warn={stats.riderOutstanding > 0} />
+                                {/* Rider pay breakdown */}
+                                <div className="px-6 pb-3 space-y-1">
+                                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Rider pay breakdown (cumulative)</p>
+                                    {stats.riderEarningsBreakdown.legacyTotal > 0 && (
+                                        <div className="flex justify-between text-xs text-slate-500">
+                                            <span>Before 17 Apr (delivery fee basis)</span>
+                                            <span className="font-medium text-slate-700">{fmt(stats.riderEarningsBreakdown.legacyTotal)}</span>
+                                        </div>
+                                    )}
+                                    {stats.riderEarningsBreakdown.deliveryCount > 0 && (
+                                        <>
+                                            <div className="flex justify-between text-xs text-slate-500">
+                                                <span>Fixed daily ({stats.riderEarningsBreakdown.activeDays} rider-days × ₹300)</span>
+                                                <span className="font-medium text-slate-700">{fmt(stats.riderEarningsBreakdown.fixed)}</span>
+                                            </div>
+                                            <div className="flex justify-between text-xs text-slate-500">
+                                                <span>Per delivery ({stats.riderEarningsBreakdown.deliveryCount} × ₹15)</span>
+                                                <span className="font-medium text-slate-700">{fmt(stats.riderEarningsBreakdown.perDelivery)}</span>
+                                            </div>
+                                            {stats.riderEarningsBreakdown.bonus > 0 && (
+                                                <div className="flex justify-between text-xs text-slate-500">
+                                                    <span>🏆 Delivery bonuses</span>
+                                                    <span className="font-medium text-slate-700">{fmt(stats.riderEarningsBreakdown.bonus)}</span>
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
+                                </div>
+                            </div>
                             <div className="px-6 py-3 flex items-center justify-between bg-red-50">
                                 <span className="font-bold text-red-700 text-sm">Total Outstanding</span>
                                 <span className="font-bold text-red-600">{fmt(stats.restaurantOutstanding + stats.riderOutstanding)}</span>
