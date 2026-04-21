@@ -5,6 +5,43 @@ import { createClient } from '@/lib/supabase/client';
 import { Edit } from 'lucide-react';
 import EditOrderModal from './EditOrderModal';
 
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function LocationMismatchBadge({ order }: { order: any }) {
+    const hasLiveLocation = order.customer_lat != null && order.customer_lng != null;
+    const hasAddressCoords = order.address?.latitude != null && order.address?.longitude != null;
+    if (!hasLiveLocation || !hasAddressCoords) return null;
+
+    const distKm = haversineKm(
+        order.customer_lat, order.customer_lng,
+        order.address.latitude, order.address.longitude
+    );
+
+    const color =
+        distKm < 1   ? 'bg-green-100 text-green-700 border-green-200' :
+        distKm < 2.5 ? 'bg-amber-100 text-amber-700 border-amber-200' :
+                       'bg-red-100 text-red-700 border-red-200';
+    const icon = distKm < 1 ? '📍' : distKm < 2.5 ? '⚠️' : '🚨';
+
+    return (
+        <span
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${color}`}
+            title={`Customer was ${distKm.toFixed(2)} km from delivery address when order was placed`}
+        >
+            {icon} {distKm.toFixed(1)} km away
+        </span>
+    );
+}
+
 export default function OrdersTable() {
     const [orders, setOrders] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -420,6 +457,7 @@ export default function OrdersTable() {
                                         <td className="py-2.5 px-3">
                                             <div className="font-medium text-gray-900 text-xs truncate max-w-[120px]">{order.customer?.full_name || 'Unknown'}</div>
                                             <div className="text-[10px] text-gray-500">{order.customer?.phone || 'No phone'}</div>
+                                            <div className="mt-0.5"><LocationMismatchBadge order={order} /></div>
                                         </td>
                                         <td className="py-2.5 px-3">
                                             <div className="text-xs text-gray-900 truncate max-w-[120px]">{order.restaurant?.name}</div>
@@ -554,7 +592,14 @@ export default function OrdersTable() {
                                                                 <p className="text-xs font-medium text-gray-900">{order.address?.label}</p>
                                                                 <p className="text-xs text-gray-600">{order.address?.address_line1}</p>
                                                                 {order.address?.latitude && order.address?.longitude && (
-                                                                    <p className="text-[10px] text-gray-400 mt-1 font-mono">{order.address.latitude}, {order.address.longitude}</p>
+                                                                    <p className="text-[10px] text-gray-400 mt-1 font-mono">{order.address.latitude.toFixed(5)}, {order.address.longitude.toFixed(5)}</p>
+                                                                )}
+                                                                {order.customer_lat != null && order.customer_lng != null && (
+                                                                    <div className="mt-2 pt-2 border-t border-gray-100">
+                                                                        <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">📱 Customer Location at Order Time</p>
+                                                                        <p className="text-[10px] text-gray-400 font-mono mb-1">{order.customer_lat.toFixed(5)}, {order.customer_lng.toFixed(5)}</p>
+                                                                        <LocationMismatchBadge order={order} />
+                                                                    </div>
                                                                 )}
                                                             </div>
 

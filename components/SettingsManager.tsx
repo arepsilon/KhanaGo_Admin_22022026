@@ -23,6 +23,9 @@ export default function SettingsManager() {
     const [whatsappNumber, setWhatsappNumber] = useState('918149875162');
     const [showMenuImages, setShowMenuImages] = useState(true);
 
+    // Global App Settings
+    const [maintenanceMode, setMaintenanceMode] = useState(false);
+
     // Surge Pricing State
     const [isSurgeActive, setIsSurgeActive] = useState(false);
     const [surgeFee, setSurgeFee] = useState('0');
@@ -97,6 +100,8 @@ export default function SettingsManager() {
                 const rpSecret = data.find(s => s.key === 'razorpay_key_secret')?.value;
                 const menuImages = data.find(s => s.key === 'show_menu_images')?.value;
                 const waNumber = data.find(s => s.key === 'whatsapp_support_url')?.value;
+                // maintenance_mode is always global (city_id = null) — skip it here, fetched separately below
+                const mMode_unused = undefined;
 
                 const grocCharge = data.find(s => s.key === 'grocery_delivery_charge')?.value;
                 const grocMin = data.find(s => s.key === 'grocery_minimum_order')?.value;
@@ -114,6 +119,7 @@ export default function SettingsManager() {
                 if (platFee !== undefined) setPlatformFee(String(platFee));
                 if (menuImages !== undefined) setShowMenuImages(Boolean(menuImages));
                 if (waNumber !== undefined) setWhatsappNumber(String(waNumber).replace(/"/g, ''));
+                // maintenance_mode is loaded separately below (always global)
 
                 if (grocCharge !== undefined) setGroceryDeliveryCharge(String(grocCharge));
                 if (grocMin !== undefined) setGroceryMinimumOrder(String(grocMin));
@@ -126,6 +132,19 @@ export default function SettingsManager() {
                 if (sActive !== undefined) setIsSurgeActive(Boolean(sActive));
                 if (sFee !== undefined) setSurgeFee(String(sFee));
                 if (sReason !== undefined) setSurgeReason(String(sReason).replace(/"/g, ''));
+            }
+
+            // Always fetch maintenance_mode from global settings (city_id = null),
+            // regardless of which city is selected — it is a global lock.
+            const { data: globalData } = await supabase
+                .from('app_settings')
+                .select('value')
+                .eq('key', 'maintenance_mode')
+                .is('city_id', null)
+                .single();
+
+            if (globalData && globalData.value !== undefined) {
+                setMaintenanceMode(Boolean(globalData.value));
             }
         } catch (error) {
             console.error('Error loading settings:', error);
@@ -165,7 +184,10 @@ export default function SettingsManager() {
                 // Surge Pricing
                 { key: 'is_surge_active', value: isSurgeActive, description: 'Enable/Disable surge pricing for this city', city_id: selectedCityId },
                 { key: 'surge_fee', value: parseFloat(surgeFee) || 0, description: 'Flat surge fee amount', city_id: selectedCityId },
-                { key: 'surge_reason', value: JSON.stringify(surgeReason), description: 'Reason for surge shown to customers', city_id: selectedCityId }
+                { key: 'surge_reason', value: JSON.stringify(surgeReason), description: 'Reason for surge shown to customers', city_id: selectedCityId },
+
+                // Global Settings
+                { key: 'maintenance_mode', value: maintenanceMode, description: 'Global Maintenance Mode Lock', city_id: null }
             ];
 
             for (const update of updates) {
@@ -219,6 +241,30 @@ export default function SettingsManager() {
             )}
 
             <div className="space-y-6">
+                {/* System Status Section (Global) */}
+                <div className="p-6 rounded-xl border border-red-200 bg-red-50/50 space-y-4">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-start gap-4">
+                            <div className="p-3 bg-red-100 rounded-lg text-red-600">
+                                <AlertCircle size={24} />
+                            </div>
+                            <div>
+                                <h3 className="font-bold text-slate-900">Maintenance Mode</h3>
+                                <p className="text-sm text-slate-500">Enable to lock the Customer App globally. Users will see a maintenance screen.</p>
+                            </div>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={maintenanceMode}
+                                onChange={(e) => setMaintenanceMode(e.target.checked)}
+                                className="sr-only peer"
+                            />
+                            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500"></div>
+                        </label>
+                    </div>
+                </div>
+
                 {/* Min Version */}
                 <div className="space-y-2">
                     <label className="block text-sm font-semibold text-slate-900">Minimum Supported App Version</label>
