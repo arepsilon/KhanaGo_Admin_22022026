@@ -56,8 +56,29 @@ export async function GET(request: Request) {
       .eq('is_used_for_coupon', false)
       .gte('scanned_at', new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString())
 
-    const scansLeft = 5 - (count || 0)
+    const currentScans = count || 0
+    const scansLeft = 5 - currentScans
     
+    let rewardContent = ''
+    if (scansLeft === 0) {
+      rewardContent = `
+        <h2 style="color: #ea580c; margin: 0;">Reward Unlocked! 🎁</h2>
+        <p style="color: #1e293b; margin-top: 8px;">A free order coupon (up to ₹250) has been added to your account!</p>`
+    } else {
+      const dots = Array.from({ length: 5 }).map((_, i) => 
+        `<div style="width: 12px; height: 12px; border-radius: 6px; background: ${i < currentScans ? '#16a34a' : '#e2e8f0'};"></div>`
+      ).join('')
+      
+      rewardContent = `
+        <h2 style="color: #1e293b; margin: 0;">Loyalty Progress</h2>
+        <p style="color: #64748b; margin-top: 8px;">Scan <b>${scansLeft}</b> more delivery QRs this week to get your next order FREE!</p>
+        <div style="display: flex; gap: 8px; justify-content: center; margin-top: 15px;">
+           ${dots}
+        </div>`
+    }
+
+    const confettiScript = scansLeft === 0 ? '<script>confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });</script>' : ''
+
     return new NextResponse(`
       <html>
         <head>
@@ -70,22 +91,10 @@ export async function GET(request: Request) {
             <p style="color: #64748b; font-size: 18px;">Order #${order.order_number} has been confirmed.</p>
             
             <div style="margin-top: 30px; padding: 20px; background: #f8fafc; border-radius: 16px;">
-              ${scansLeft === 0 ? 
-                \`<h2 style="color: #ea580c; margin: 0;">Reward Unlocked! 🎁</h2>
-                 <p style="color: #1e293b; margin-top: 8px;">A free order coupon (up to ₹250) has been added to your account!</p>\` : 
-                \`<h2 style="color: #1e293b; margin: 0;">Loyalty Progress</h2>
-                 <p style="color: #64748b; margin-top: 8px;">Scan <b>\${scansLeft}</b> more delivery QRs this week to get your next order FREE!</p>
-                 <div style="display: flex; gap: 8px; justify-content: center; margin-top: 15px;">
-                    \${Array.from({length: 5}).map((_, i) => 
-                      \`<div style="width: 12px; height: 12px; border-radius: 6px; background: \${i < (count || 0) ? '#16a34a' : '#e2e8f0'};"></div>\`
-                    ).join('')}
-                 </div>\`
-              }
+              ${rewardContent}
             </div>
           </div>
-          <script>
-            \${scansLeft === 0 ? 'confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });' : ''}
-          </script>
+          ${confettiScript}
         </body>
       </html>
     `, { headers: { 'Content-Type': 'text/html' } })
