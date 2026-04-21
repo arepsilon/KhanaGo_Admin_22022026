@@ -43,7 +43,7 @@ export async function GET(request: Request) {
               <button onclick="window.close()" style="margin-top: 20px; padding: 10px 20px; background: #64748b; color: white; border: none; border-radius: 8px;">Close</button>
             </body>
           </html>
-        `, { headers: { 'Content-Type': 'text/html' } })
+        `, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
       }
       throw scanError
     }
@@ -97,7 +97,7 @@ export async function GET(request: Request) {
           ${confettiScript}
         </body>
       </html>
-    `, { headers: { 'Content-Type': 'text/html' } })
+    `, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
 
   } catch (error: any) {
     console.error('Scan Error:', error)
