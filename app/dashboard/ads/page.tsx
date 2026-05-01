@@ -20,7 +20,7 @@ export default async function AdsPage() {
         .single();
 
     const superAdmins = ['8003270534@khanago.admin', '9867109138@khanago.admin'];
-    if (profile?.role !== 'admin' || !superAdmins.includes(user.email)) {
+    if (profile?.role !== 'admin' || !user.email || !superAdmins.includes(user.email)) {
         redirect('/dashboard');
     }
 
