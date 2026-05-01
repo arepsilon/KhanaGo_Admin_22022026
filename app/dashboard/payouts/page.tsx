@@ -1,6 +1,5 @@
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
-import Sidebar from '@/components/Sidebar';
 import PaymentReports from '@/components/PaymentReports';
 
 export default async function PayoutsPage() {
@@ -26,14 +25,9 @@ export default async function PayoutsPage() {
     }
 
     return (
-        <div className="flex min-h-screen bg-gray-50">
-            <Sidebar />
-            <main className="flex-1 p-8">
-                <div className="max-w-7xl mx-auto">
-                    <h1 className="text-3xl font-bold text-gray-900 mb-8">Payment Reports</h1>
-                    <PaymentReports />
-                </div>
-            </main>
+        <div className="max-w-7xl mx-auto">
+            <h1 className="text-3xl font-bold text-gray-900 mb-8">Payment Reports</h1>
+            <PaymentReports />
         </div>
     );
 }

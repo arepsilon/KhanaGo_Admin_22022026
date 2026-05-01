@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Edit } from 'lucide-react';
 import EditOrderModal from './EditOrderModal';
@@ -45,7 +45,7 @@ function LocationMismatchBadge({ order }: { order: any }) {
 export default function OrdersTable() {
     const [orders, setOrders] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
-    const [filter, setFilter] = useState<'all' | 'pending' | 'ready' | 'picked_up' | 'delivered' | 'cancelled'>('pending');
+    const [filter, setFilter] = useState<'all' | 'pending' | 'preparing' | 'picked_up' | 'delivered'>('all');
     const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
     const [onlineRiders, setOnlineRiders] = useState<any[]>([]);
     const [isAssigning, setIsAssigning] = useState(false);
@@ -58,6 +58,68 @@ export default function OrdersTable() {
     const [dateFrom, setDateFrom] = useState<string>('');
     const [dateTo, setDateTo] = useState<string>('');
     const supabase = createClient();
+    
+    // Route Clustering Logic
+    const ROUTE_THRESHOLD_KM = 5.0;
+    const routeClusters = useMemo(() => {
+        const clusters: Record<string, { id: string; color: string; count: number }> = {};
+        const activeOrders = orders.filter(o => !['delivered', 'cancelled', 'rejected'].includes(o.status));
+        
+        // Group by restaurant first
+        const byRestaurant: Record<string, any[]> = {};
+        activeOrders.forEach(o => {
+            if (!byRestaurant[o.restaurant_id]) byRestaurant[o.restaurant_id] = [];
+            byRestaurant[o.restaurant_id].push(o);
+        });
+
+        let nextRouteNum = 1;
+        const colors = [
+            'bg-blue-100 text-blue-700 border-blue-200',
+            'bg-purple-100 text-purple-700 border-purple-200',
+            'bg-pink-100 text-pink-700 border-pink-200',
+            'bg-indigo-100 text-indigo-700 border-indigo-200',
+            'bg-teal-100 text-teal-700 border-teal-200',
+            'bg-orange-100 text-orange-700 border-orange-200',
+        ];
+
+        Object.values(byRestaurant).forEach(restOrders => {
+            const groupings: any[][] = [];
+            
+            restOrders.forEach(o => {
+                const lat = o.address?.latitude;
+                const lng = o.address?.longitude;
+                if (lat == null || lng == null) return;
+
+                let foundGroup = false;
+                for (const group of groupings) {
+                    for (const member of group) {
+                        const dist = haversineKm(lat, lng, member.address.latitude, member.address.longitude);
+                        if (dist <= ROUTE_THRESHOLD_KM) {
+                            group.push(o);
+                            foundGroup = true;
+                            break;
+                        }
+                    }
+                    if (foundGroup) break;
+                }
+
+                if (!foundGroup) {
+                    groupings.push([o]);
+                }
+            });
+
+            // Assign cluster info to only those in groups > 1
+            groupings.filter(g => g.length > 1).forEach(group => {
+                const routeId = `RT-${nextRouteNum++}`;
+                const color = colors[(nextRouteNum - 2) % colors.length];
+                group.forEach(o => {
+                    clusters[o.id] = { id: routeId, color, count: group.length };
+                });
+            });
+        });
+
+        return clusters;
+    }, [orders]);
 
     const getDateRange = (): { from: string; to: string } | null => {
         const now = new Date();
@@ -128,7 +190,7 @@ export default function OrdersTable() {
             .from('orders')
             .select(`
                 *,
-                restaurant:restaurants(name),
+                restaurant:restaurants(name, preparation_time),
                 customer:profiles!customer_id(full_name, phone, orders(count)),
                 address:addresses(address_line1, city, label, latitude, longitude),
                 order_items(
@@ -152,11 +214,10 @@ export default function OrdersTable() {
         }
 
         const filterStatuses: Record<string, string[]> = {
-            pending: ['pending', 'accepted', 'preparing'],
-            ready: ['ready', 'assigned'],
-            picked_up: ['picked_up'],
-            delivered: ['delivered'],
-            cancelled: ['cancelled', 'rejected'],
+            pending: ['pending'],
+            preparing: ['accepted', 'preparing', 'ready', 'assigned'],
+            picked_up: ['picked_up', 'on_the_way'],
+            delivered: ['delivered', 'wastage'],
         };
         if (filter !== 'all') {
             query = query.in('status', filterStatuses[filter]);
@@ -235,8 +296,15 @@ export default function OrdersTable() {
 
     const updateOrderStatus = async (orderId: string, newStatus: string) => {
         const updatePayload: any = { status: newStatus };
-        if (newStatus === 'cancelled' || newStatus === 'rejected') {
+        if (newStatus === 'cancelled' || newStatus === 'rejected' || newStatus === 'wastage') {
             updatePayload.cancelled_by = 'admin';
+        }
+        if (newStatus === 'accepted') {
+            const now = new Date();
+            updatePayload.accepted_by = 'admin';
+            updatePayload.accepted_at = now.toISOString();
+            updatePayload.promised_prep_minutes = 30; // Default 30 mins for admin acceptance
+            updatePayload.promised_ready_at = new Date(now.getTime() + 30 * 60000).toISOString();
         }
 
         const { error } = await supabase
@@ -281,6 +349,7 @@ export default function OrdersTable() {
             delivered: 'bg-green-100 text-green-800 border-green-200',
             cancelled: 'bg-red-100 text-red-800 border-red-200',
             rejected: 'bg-red-100 text-red-800 border-red-200',
+            wastage: 'bg-amber-100 text-amber-800 border-amber-200',
         };
         return colors[status] || 'bg-gray-100 text-gray-800 border-gray-200';
     };
@@ -344,10 +413,9 @@ export default function OrdersTable() {
                     {([
                         { key: 'all', label: 'All' },
                         { key: 'pending', label: 'Pending' },
-                        { key: 'ready', label: 'Ready' },
+                        { key: 'preparing', label: 'Preparing' },
                         { key: 'picked_up', label: 'Picked Up' },
                         { key: 'delivered', label: 'Delivered' },
-                        { key: 'cancelled', label: 'Cancelled' },
                     ] as const).map(({ key, label }) => (
                         <button
                             key={key}
@@ -407,6 +475,7 @@ export default function OrdersTable() {
 
             {/* Orders Table */}
             <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+                <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                     <thead>
                         <tr className="bg-gray-50 border-b border-gray-200">
@@ -417,6 +486,7 @@ export default function OrdersTable() {
                             <th className="text-right py-3 px-3 font-semibold text-gray-600 text-xs uppercase tracking-wider">Total</th>
                             <th className="text-center py-3 px-3 font-semibold text-gray-600 text-xs uppercase tracking-wider">Status</th>
                             <th className="text-left py-3 px-3 font-semibold text-gray-600 text-xs uppercase tracking-wider">Rider</th>
+                            <th className="text-center py-3 px-2 font-semibold text-gray-600 text-xs uppercase tracking-wider">Route</th>
                             <th className="text-center py-3 px-2 font-semibold text-gray-600 text-xs uppercase tracking-wider">Prep</th>
                             <th className="text-center py-3 px-2 font-semibold text-gray-600 text-xs uppercase tracking-wider">Picked Up</th>
                             <th className="text-center py-3 px-2 font-semibold text-gray-600 text-xs uppercase tracking-wider">Delivery</th>
@@ -474,6 +544,18 @@ export default function OrdersTable() {
                                             <span className={`inline-block px-2 py-0.5 text-[10px] font-semibold rounded-full whitespace-nowrap ${getStatusColor(order.status)}`}>
                                                 {order.status.replace('_', ' ').toUpperCase()}
                                             </span>
+                                            {order.accepted_at && !['delivered', 'picked_up'].includes(order.status) && (
+                                                <div className="mt-1">
+                                                    <span className={`px-1.5 py-0.5 rounded-[4px] text-[9px] font-bold uppercase tracking-tight ${
+                                                        order.accepted_by === 'admin' ? 'bg-amber-100 text-amber-800 border border-amber-200' :
+                                                        order.accepted_by === 'restaurant' ? 'bg-blue-100 text-blue-800 border border-blue-200' :
+                                                        'bg-gray-100 text-gray-700 border border-gray-200'
+                                                    }`}>
+                                                        {order.accepted_by === 'admin' ? 'By Admin' : 'By Rest.'}
+                                                        {(order.promised_prep_minutes || order.restaurant?.preparation_time) ? ` (${order.promised_prep_minutes || order.restaurant?.preparation_time}m)` : ''}
+                                                    </span>
+                                                </div>
+                                            )}
                                         </td>
                                         <td className="py-2.5 px-3">
                                             {rider ? (
@@ -483,13 +565,46 @@ export default function OrdersTable() {
                                             )}
                                         </td>
                                         <td className="py-2.5 px-2 text-center">
-                                            {order.accepted_at && delivery?.pickup_time ? (
-                                                <span className="text-xs font-medium text-indigo-600">{formatDuration(order.accepted_at, delivery.pickup_time)}</span>
+                                            {routeClusters[order.id] ? (
+                                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${routeClusters[order.id].color}`} title={`Part of active route ${routeClusters[order.id].id} with ${routeClusters[order.id].count} orders`}>
+                                                    🚚 {routeClusters[order.id].id}
+                                                </span>
                                             ) : (
-                                                <span className="text-xs text-gray-400">—</span>
+                                                <span className="text-[10px] text-gray-300">—</span>
                                             )}
                                         </td>
-                                        <td className="py-2.5 px-2 text-center">
+                                        <td className="py-2.5 px-2 text-center text-xs font-medium text-gray-900">
+                                            {(() => {
+                                                // After pickup → show actual prep duration
+                                                if (order.accepted_at && delivery?.pickup_time) {
+                                                    return <span className="text-indigo-600">{formatDuration(order.accepted_at, delivery.pickup_time) || '—'}</span>;
+                                                }
+                                                // Active order with prep time set → show pickup-ready time so rider can plan arrival
+                                                const prepMins = order.promised_prep_minutes || order.restaurant?.preparation_time;
+                                                const isActive = ['accepted', 'preparing', 'ready', 'assigned'].includes(order.status);
+                                                if (isActive && order.accepted_at && prepMins) {
+                                                    const readyAt = new Date(new Date(order.accepted_at).getTime() + prepMins * 60000);
+                                                    const readyTimeStr = readyAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                                    const diffMin = Math.round((readyAt.getTime() - Date.now()) / 60000);
+                                                    const isLate = diffMin < 0;
+                                                    const isSoon = diffMin >= 0 && diffMin <= 5;
+                                                    const labelColor = isLate ? 'text-red-600' : isSoon ? 'text-amber-600' : 'text-emerald-600';
+                                                    const subColor = isLate ? 'text-red-500' : isSoon ? 'text-amber-500' : 'text-gray-500';
+                                                    return (
+                                                        <div className="flex flex-col items-center leading-tight">
+                                                            <span className={`font-bold ${labelColor}`} title="Time rider should reach restaurant">
+                                                                🛵 {readyTimeStr}
+                                                            </span>
+                                                            <span className={`text-[10px] ${subColor}`}>
+                                                                {isLate ? `${Math.abs(diffMin)}m late` : `in ${diffMin}m`}
+                                                            </span>
+                                                        </div>
+                                                    );
+                                                }
+                                                return <span className="text-orange-400">—</span>;
+                                            })()}
+                                        </td>
+                                        <td className="py-2.5 px-2 text-center text-xs font-medium text-gray-900">
                                             {delivery?.pickup_time ? (
                                                 <div>
                                                     <div className="text-xs font-medium text-violet-600">
@@ -506,8 +621,8 @@ export default function OrdersTable() {
                                             )}
                                         </td>
                                         <td className="py-2.5 px-2 text-center">
-                                            {order.delivered_at ? (
-                                                <span className="text-xs font-medium text-emerald-600">{formatDuration(order.created_at, order.delivered_at)}</span>
+                                            {order.delivered_at && delivery?.pickup_time ? (
+                                                <span className="text-xs font-medium text-emerald-600">{formatDuration(delivery.pickup_time, order.delivered_at)}</span>
                                             ) : (
                                                 <span className="text-xs text-gray-400">—</span>
                                             )}
@@ -515,13 +630,15 @@ export default function OrdersTable() {
                                         <td className="py-2.5 px-3 text-right">
                                             <div className="text-xs text-gray-900 font-medium">{timeStr}</div>
                                             <div className="text-[10px] text-gray-500">{dateStr}</div>
-                                            {(order.status === 'cancelled' || order.status === 'rejected') && cancelledByLabel && (
+                                            {(order.status === 'cancelled' || order.status === 'rejected' || order.status === 'wastage') && cancelledByLabel && (
                                                 <div className="flex flex-col items-end mt-1">
-                                                    <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold ${order.cancelled_by === 'customer' ? 'bg-blue-50 text-blue-700'
+                                                    <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                                                        order.status === 'wastage' ? 'bg-amber-100 text-amber-800'
+                                                        : order.cancelled_by === 'customer' ? 'bg-blue-50 text-blue-700'
                                                         : order.cancelled_by === 'restaurant' ? 'bg-purple-50 text-purple-700'
-                                                            : 'bg-gray-100 text-gray-700'
-                                                        }`}>
-                                                        ✕ {cancelledByLabel}
+                                                        : 'bg-gray-100 text-gray-700'
+                                                    }`}>
+                                                        {order.status === 'wastage' ? '🗑️' : '✕'} {order.status === 'wastage' ? 'Wastage' : cancelledByLabel}
                                                     </span>
                                                     {order.cancellation_reason && (
                                                         <span className="text-[9px] text-gray-400 mt-0.5 max-w-[100px] truncate text-right italic" title={order.cancellation_reason}>
@@ -560,6 +677,11 @@ export default function OrdersTable() {
                                                                     🛵 {rider.full_name} • {rider.phone}
                                                                 </span>
                                                             )}
+                                                             {order.accepted_at && (
+                                                                <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                                                                    🕒 Prep: {order.promised_prep_minutes || order.restaurant?.preparation_time || '—'}m (by {order.accepted_by === 'admin' ? 'Admin' : 'Restaurant'})
+                                                                </span>
+                                                            )}
                                                             <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-gray-100 text-gray-700">
                                                                 💳 {order.payment_method.toUpperCase()} — {order.payment_status.toUpperCase()}
                                                             </span>
@@ -573,13 +695,17 @@ export default function OrdersTable() {
                                                                     🍳 {formatDuration(order.accepted_at, order.prepared_at)}
                                                                 </span>
                                                             )}
-                                                            {(order.status === 'cancelled' || order.status === 'rejected') && cancelledByLabel && (
-                                                                <span className={`px-2 py-0.5 text-[10px] font-semibold rounded-full border ${order.cancelled_by === 'customer' ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                                            {(order.status === 'cancelled' || order.status === 'rejected' || order.status === 'wastage') && cancelledByLabel && (
+                                                                <span className={`px-2 py-0.5 text-[10px] font-semibold rounded-full border ${
+                                                                    order.status === 'wastage' ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                                                    : order.cancelled_by === 'customer' ? 'bg-blue-50 text-blue-700 border-blue-200'
                                                                     : order.cancelled_by === 'restaurant' ? 'bg-purple-50 text-purple-700 border-purple-200'
-                                                                        : 'bg-gray-100 text-gray-700 border-gray-200'
-                                                                    }`}>
-                                                                    {order.status === 'cancelled' ? 'Cancelled' : 'Rejected'} by {cancelledByLabel}
-                                                                    {order.cancellation_reason && `: ${order.cancellation_reason}`}
+                                                                    : 'bg-gray-100 text-gray-700 border-gray-200'
+                                                                }`}>
+                                                                    {order.status === 'wastage'
+                                                                        ? `🗑️ Wastage (restaurant paid)`
+                                                                        : `${order.status === 'cancelled' ? 'Cancelled' : 'Rejected'} by ${cancelledByLabel}`}
+                                                                    {order.status !== 'wastage' && order.cancellation_reason && `: ${order.cancellation_reason}`}
                                                                 </span>
                                                             )}
                                                         </div>
@@ -694,6 +820,7 @@ export default function OrdersTable() {
                                                                     <option value="delivered">Delivered</option>
                                                                     <option value="cancelled">Cancelled</option>
                                                                     <option value="rejected">Rejected</option>
+                                                                    <option value="wastage">Wastage</option>
                                                                 </select>
                                                             </div>
                                                         </div>
@@ -707,6 +834,7 @@ export default function OrdersTable() {
                         })}
                     </tbody>
                 </table >
+                </div>
 
 
                 {/* Force Assign Modal */}

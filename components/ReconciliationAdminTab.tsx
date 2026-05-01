@@ -18,14 +18,15 @@ interface AdminOrderBreakdown {
     order_number: string;
     created_at: string;
     restaurantName: string;
-    orderTotal: number;          // what the customer paid (orders.total)
-    commission: number;          // commission_percent % of food subtotal
+    orderTotal: number;          // what the customer paid (orders.total, net of discount)
+    commission: number;          // unit_price − base_price markup per order
     customerPlatformFee: number; // o.platform_fee — from customer
     platformFee: number;         // restaurant.platform_fee_per_order — from restaurant
     transactionFee: number;
     deliveryFee: number;
-    restaurantShare: number;     // what the restaurant earns after all deductions
-    platformRevenue: number;     // total platform revenue on this order
+    couponDiscount: number;      // platform-funded discount (orders.discount_amount)
+    restaurantShare: number;     // what the restaurant earns: base_price_sum − fees
+    platformRevenue: number;     // gross platform revenue before coupon cost
 }
 
 interface AdminStats {
@@ -35,10 +36,11 @@ interface AdminStats {
     customerPlatformFeeRevenue: number;
     transactionFeeRevenue: number;
     deliveryFeeRevenue: number;
-    totalRevenue: number;         // all platform revenue for the period
+    totalRevenue: number;         // gross platform revenue for the period (before coupon deduction)
+    couponDiscounts: number;      // platform-funded coupon discounts in period
     riderCost: number;            // rider payouts made in period
     overheadExpenses: number;     // overhead expenses in period
-    netIncome: number;            // totalRevenue - riderCost - overheadExpenses
+    netIncome: number;            // totalRevenue - couponDiscounts - riderCost - overheadExpenses
     restaurantPayoutsMade: number;
     riderPayoutsMade: number;
     orderCount: number;
@@ -182,11 +184,10 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                 restNameMap[r.id]       = r.name ?? '—';
             });
 
-            // Orders — use orders.total / subtotal as authoritative amounts (not recalculated from order_items)
-            // Filter server-side from LEGACY_CUTOFF to end of selected period to avoid hitting the default 1000-row limit
+            // Include order_items so commission = actual price markup (unit_price − base_price), not estimated %
             const { data: orders, error: ordErr } = await supabase
                 .from('orders')
-                .select('id, order_number, restaurant_id, total, subtotal, delivery_fee, platform_fee, created_at')
+                .select('id, order_number, restaurant_id, total, subtotal, delivery_fee, platform_fee, discount_amount, created_at, order_items(quantity, unit_price, base_price)')
                 .in('status', ['delivered', 'completed'])
                 .gte('created_at', '2026-04-09T00:00:00.000Z')
                 .lte('created_at', `${dateRange.end}T23:59:59.999Z`)
@@ -223,8 +224,9 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
             const endUTC        = new Date(`${dateRange.end}T23:59:59.999Z`).getTime();
             const LEGACY_CUTOFF = new Date('2026-04-09T00:00:00.000Z').getTime();
 
-            // ── Revenue from orders (all values from orders table only) ─────
+            // ── Revenue from orders ───────────────────────────────────────
             let commissionRevenue = 0, restaurantPlatformFeeRevenue = 0, customerPlatformFeeRevenue = 0, transactionFeeRevenue = 0, deliveryFeeRevenue = 0, orderCount = 0;
+            let couponDiscounts = 0;
             let restaurantEarnedTotal = 0, restaurantPaidTotal = 0;
             let totalOrderCollections = 0;
             const periodOrderBreakdown: AdminOrderBreakdown[] = [];
@@ -233,28 +235,33 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                 const t = new Date(o.created_at).getTime();
                 if (t < LEGACY_CUTOFF) return;
 
-                const orderTotal       = Number(o.total || 0);
-                // subtotal = food-only amount (customer price before delivery + platform fee)
-                const subtotal         = Number(o.subtotal || 0) || Math.max(0, orderTotal - Number(o.delivery_fee || 0) - Number(o.platform_fee || 0));
-                const delFee           = Number(o.delivery_fee || 0);
-                const custPlatFee      = Number(o.platform_fee || 0);
-                const restPlatFee      = restFeeMap[o.restaurant_id] ?? 0;
-                const txnPercent       = restTxnMap[o.restaurant_id] ?? 0;
-                const commissionPct    = restCommissionMap[o.restaurant_id] ?? 0;
-                const txnFee           = orderTotal * txnPercent / 100;
-                // Commission = % of food subtotal (consistent with AnalyticsDashboard and payout function)
-                const commission       = subtotal * commissionPct / 100;
+                const orderTotal    = Number(o.total || 0);
+                const subtotal      = Number(o.subtotal || 0) || Math.max(0, orderTotal - Number(o.delivery_fee || 0) - Number(o.platform_fee || 0));
+                const delFee        = Number(o.delivery_fee || 0);
+                const custPlatFee   = Number(o.platform_fee || 0);
+                const restPlatFee   = restFeeMap[o.restaurant_id] ?? 0;
+                const txnPercent    = restTxnMap[o.restaurant_id] ?? 0;
+                const commissionPct = restCommissionMap[o.restaurant_id] ?? 0;
+                const txnFee        = orderTotal * txnPercent / 100;
+                const couponDiscount = Number(o.discount_amount || 0);
 
-                // Restaurant's share = subtotal minus commission and restaurant-side fees
-                const restaurantShare  = subtotal - commission - restPlatFee - txnFee;
-                // Platform's total revenue on this order
-                const platformRevenue  = commission + custPlatFee + restPlatFee + txnFee + delFee;
+                // Commission = actual price markup (unit_price − base_price per item).
+                // Falls back to estimated % if order_items are missing.
+                const baseTotal = (o.order_items && o.order_items.length > 0)
+                    ? o.order_items.reduce((s: number, i: any) => s + Number(i.base_price ?? i.unit_price) * Number(i.quantity), 0)
+                    : subtotal * (1 - commissionPct / 100);
+                const commission = Math.max(0, subtotal - baseTotal);
+
+                // Restaurant's share = their cost price minus restaurant-facing fees
+                const restaurantShare = Math.max(0, baseTotal - restPlatFee - txnFee);
+                // Gross platform revenue on this order (before coupon cost)
+                const platformRevenue = commission + custPlatFee + restPlatFee + txnFee + delFee;
 
                 // All orders treated as cash in hand (regardless of payment method)
                 if (t <= endUTC) totalOrderCollections += orderTotal;
 
                 // Restaurant outstanding — cumulative up to end of selected period
-                if (t <= endUTC) restaurantEarnedTotal += Math.max(0, restaurantShare);
+                if (t <= endUTC) restaurantEarnedTotal += restaurantShare;
 
                 if (t >= startUTC && t <= endUTC) {
                     commissionRevenue            += commission;
@@ -262,6 +269,7 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                     customerPlatformFeeRevenue   += custPlatFee;
                     transactionFeeRevenue        += txnFee;
                     deliveryFeeRevenue           += delFee;
+                    couponDiscounts              += couponDiscount;
                     orderCount++;
                     periodOrderBreakdown.push({
                         id:                 o.id,
@@ -274,6 +282,7 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                         platformFee:         restPlatFee,
                         transactionFee:      txnFee,
                         deliveryFee:         delFee,
+                        couponDiscount,
                         restaurantShare,
                         platformRevenue,
                     });
@@ -324,9 +333,10 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
             });
 
             // ── Period P&L ───────────────────────────────────────────────────
-            const riderCost             = riderPayoutsMade;
-            const totalRevenue          = commissionRevenue + restaurantPlatformFeeRevenue + customerPlatformFeeRevenue + transactionFeeRevenue + deliveryFeeRevenue;
-            const netIncome             = totalRevenue - riderCost - overheadExpenses;
+            const riderCost    = riderPayoutsMade;
+            const totalRevenue = commissionRevenue + restaurantPlatformFeeRevenue + customerPlatformFeeRevenue + transactionFeeRevenue + deliveryFeeRevenue;
+            // couponDiscounts = platform-funded discounts; reduces net income since less cash was collected
+            const netIncome    = totalRevenue - couponDiscounts - riderCost - overheadExpenses;
 
             // ── Cumulative outstanding (since cutoff, up to end of period) ───
             const restaurantOutstanding = Math.max(0, restaurantEarnedTotal - restaurantPaidTotal);
@@ -344,6 +354,7 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
             setStats({
                 // period
                 commissionRevenue, restaurantPlatformFeeRevenue, customerPlatformFeeRevenue, transactionFeeRevenue, deliveryFeeRevenue, totalRevenue,
+                couponDiscounts,
                 riderCost, overheadExpenses, netIncome,
                 restaurantPayoutsMade, riderPayoutsMade,
                 orderCount, riderPayoutCount,
@@ -420,9 +431,8 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
 
             y += 18;
 
-            // Table
-            // Landscape A4 = 297mm, usable 14–283
-            const COL = { num: 14, date: 20, order: 40, rest: 62, orderTotal: 97, commission: 116, custPlat: 135, restPlat: 153, txnFee: 171, delFee: 188, restShare: 206, total: 225 };
+            // Table — Landscape A4 = 297mm, usable 14–283
+            const COL = { num: 14, date: 20, order: 40, rest: 62, orderTotal: 95, commission: 114, custPlat: 132, restPlat: 149, txnFee: 166, delFee: 182, coupon: 197, restShare: 213, total: 232 };
 
             const drawHeader = () => {
                 pdf.setFillColor(241, 245, 249);
@@ -440,6 +450,7 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                 pdf.text('Rest.Plat',    COL.restPlat,   y);
                 pdf.text('Txn Fee',      COL.txnFee,     y);
                 pdf.text('Del.Fee',      COL.delFee,     y);
+                pdf.text('Coupon',       COL.coupon,     y);
                 pdf.text('Rest.Share',   COL.restShare,  y);
                 pdf.text('Plat.Rev',     COL.total,      y);
                 y += 7;
@@ -476,6 +487,14 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                 pdf.text(o.transactionFee      > 0 ? `Rs.${o.transactionFee.toFixed(2)}`      : '—',                  COL.txnFee,     y);
                 pdf.text(o.deliveryFee         > 0 ? `Rs.${o.deliveryFee.toFixed(2)}`         : '—',                  COL.delFee,     y);
 
+                if (o.couponDiscount > 0) {
+                    pdf.setTextColor(220, 38, 38);
+                    pdf.text(`-Rs.${o.couponDiscount.toFixed(2)}`, COL.coupon, y);
+                } else {
+                    pdf.setTextColor(150, 150, 150);
+                    pdf.text('—', COL.coupon, y);
+                }
+
                 pdf.setTextColor(71, 85, 105);
                 pdf.text(`Rs.${o.restaurantShare.toFixed(2)}`, COL.restShare, y);
 
@@ -509,6 +528,7 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
             pdf.text(`Rs.${stats.restaurantPlatformFeeRevenue.toFixed(2)}`,                                                      COL.restPlat,   y);
             pdf.text(`Rs.${stats.transactionFeeRevenue.toFixed(2)}`,                                                             COL.txnFee,     y);
             pdf.text(`Rs.${stats.deliveryFeeRevenue.toFixed(2)}`,                                                                COL.delFee,     y);
+            if (stats.couponDiscounts > 0) pdf.text(`-Rs.${stats.couponDiscounts.toFixed(2)}`,                                   COL.coupon,     y);
             pdf.text(`Rs.${stats.periodOrderBreakdown.reduce((s, o) => s + o.restaurantShare, 0).toFixed(2)}`,                  COL.restShare,  y);
             pdf.text(`Rs.${stats.totalRevenue.toFixed(2)}`,                                                                      COL.total,      y);
             y += 12;
@@ -522,7 +542,7 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                 14, y
             );
             y += 5;
-            pdf.text(`Overhead Expenses (period): ${fmt(stats.overheadExpenses)}   |   Net Income (period): ${fmt(stats.netIncome)}`, 14, y);
+            pdf.text(`Coupon Discounts: ${fmt(stats.couponDiscounts)}   |   Overhead: ${fmt(stats.overheadExpenses)}   |   Net Income: ${fmt(stats.netIncome)}`, 14, y);
             y += 6;
             pdf.setFont('helvetica', 'bold');
             pdf.setTextColor(0, 0, 0);
@@ -655,7 +675,7 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                 <StatCard label="Gross Revenue"   value={fmt(stats.totalRevenue)}    sub={`${stats.orderCount} orders · period`}                                                         color="green"  icon={<TrendingUp size={18} />}   />
                 <StatCard label="Paid to Riders"  value={fmt(stats.riderCost)}       sub={`${stats.riderPayoutCount} payment${stats.riderPayoutCount !== 1 ? 's' : ''} · period`}       color="red"    icon={<Bike size={18} />}          />
                 <StatCard label="Overhead"         value={fmt(stats.overheadExpenses)} sub="Operational expenses · period"                                                                color="red"    icon={<Receipt size={18} />}       />
-                <StatCard label="Net Income"       value={fmt(stats.netIncome)}       sub="Revenue − riders − overhead · period"                                                          color={stats.netIncome >= 0 ? 'orange' : 'red'} icon={<IndianRupee size={18} />} />
+                <StatCard label="Net Income"       value={fmt(stats.netIncome)}       sub="Revenue − coupons − riders − overhead · period"                                                          color={stats.netIncome >= 0 ? 'orange' : 'red'} icon={<IndianRupee size={18} />} />
             </div>
 
             {/* ── Revenue breakdown + Outstanding ──────────────────────────── */}
@@ -668,17 +688,20 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                         <span className="ml-auto text-xs text-slate-400">Period</span>
                     </div>
                     <div className="divide-y divide-slate-50">
-                        <RevenueRow label="Commission"                      description="commission_percent % of food subtotal per restaurant"             amount={stats.commissionRevenue}               positive />
-                        <RevenueRow label="Platform Fee (from Customer)"    description="Platform/service fee charged to customer on each order"           amount={stats.customerPlatformFeeRevenue}      positive />
-                        <RevenueRow label="Platform Fee (from Restaurant)"  description="Per-order flat fee deducted from restaurant payables"             amount={stats.restaurantPlatformFeeRevenue}    positive />
-                        <RevenueRow label="Transaction Charges"             description="% of order total charged to restaurants per their fee schedule"   amount={stats.transactionFeeRevenue}           positive />
-                        <RevenueRow label="Delivery Fees Collected"         description="Delivery charges paid by customers"                              amount={stats.deliveryFeeRevenue}              positive />
+                        <RevenueRow label="Commission (Price Markup)"       description="unit_price − base_price markup retained by platform per order"     amount={stats.commissionRevenue}               positive />
+                        <RevenueRow label="Platform Fee (from Customer)"    description="Platform/service fee charged to customer on each order"             amount={stats.customerPlatformFeeRevenue}      positive />
+                        <RevenueRow label="Platform Fee (from Restaurant)"  description="Per-order flat fee deducted from restaurant payables"               amount={stats.restaurantPlatformFeeRevenue}    positive />
+                        <RevenueRow label="Transaction Charges"             description="% of order total charged to restaurants per their fee schedule"     amount={stats.transactionFeeRevenue}           positive />
+                        <RevenueRow label="Delivery Fees Collected"         description="Delivery charges paid by customers"                                amount={stats.deliveryFeeRevenue}              positive />
                         <div className="px-6 py-4 flex items-center justify-between bg-slate-50">
-                            <span className="font-bold text-slate-800">Total Revenue</span>
+                            <span className="font-bold text-slate-800">Gross Revenue</span>
                             <span className="font-bold text-emerald-600 text-lg">{fmt(stats.totalRevenue)}</span>
                         </div>
-                        <RevenueRow label="Paid to Riders"    description="Actual payments made to riders in this period"                amount={stats.riderCost}         positive={false} />
-                        <RevenueRow label="Overhead Expenses" description="Operational costs recorded in the Overhead tab — this period" amount={stats.overheadExpenses}  positive={false} />
+                        {stats.couponDiscounts > 0 && (
+                            <RevenueRow label="Coupon Discounts (Platform-funded)" description="Discount absorbed by platform on coupon orders — reduces net cash received" amount={stats.couponDiscounts} positive={false} />
+                        )}
+                        <RevenueRow label="Paid to Riders"    description="Actual payments made to riders in this period"                  amount={stats.riderCost}         positive={false} />
+                        <RevenueRow label="Overhead Expenses" description="Operational costs recorded in the Overhead tab — this period"   amount={stats.overheadExpenses}  positive={false} />
                         <div className="px-6 py-4 flex items-center justify-between bg-orange-50">
                             <span className="font-bold text-slate-800">Net Income</span>
                             <span className={`font-bold text-lg ${stats.netIncome >= 0 ? 'text-orange-600' : 'text-red-600'}`}>{fmt(stats.netIncome)}</span>
@@ -797,6 +820,7 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                                             <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Rest. Plat.</th>
                                             <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Txn Fee</th>
                                             <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Del. Fee</th>
+                                            <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Coupon</th>
                                             <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Rest. Share</th>
                                             <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Plat. Rev.</th>
                                         </tr>
@@ -822,6 +846,11 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                                                 <td className="px-4 py-2.5 text-right text-emerald-600 font-medium">
                                                     {o.deliveryFee > 0 ? `₹${o.deliveryFee.toFixed(2)}` : <span className="text-slate-300">—</span>}
                                                 </td>
+                                                <td className="px-4 py-2.5 text-right font-medium">
+                                                    {o.couponDiscount > 0
+                                                        ? <span className="text-red-500">−₹{o.couponDiscount.toFixed(2)}</span>
+                                                        : <span className="text-slate-300">—</span>}
+                                                </td>
                                                 <td className="px-4 py-2.5 text-right text-slate-500 font-medium">₹{o.restaurantShare.toFixed(2)}</td>
                                                 <td className="px-4 py-2.5 text-right font-bold text-slate-900">₹{o.platformRevenue.toFixed(2)}</td>
                                             </tr>
@@ -838,6 +867,9 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                                             <td className="px-4 py-3 text-right font-bold text-emerald-600">₹{stats.restaurantPlatformFeeRevenue.toFixed(2)}</td>
                                             <td className="px-4 py-3 text-right font-bold text-emerald-600">₹{stats.transactionFeeRevenue.toFixed(2)}</td>
                                             <td className="px-4 py-3 text-right font-bold text-emerald-600">₹{stats.deliveryFeeRevenue.toFixed(2)}</td>
+                                            <td className="px-4 py-3 text-right font-bold text-red-500">
+                                                {stats.couponDiscounts > 0 ? `−₹${stats.couponDiscounts.toFixed(2)}` : '—'}
+                                            </td>
                                             <td className="px-4 py-3 text-right font-bold text-slate-500">
                                                 ₹{stats.periodOrderBreakdown.reduce((s, o) => s + o.restaurantShare, 0).toFixed(2)}
                                             </td>
@@ -854,7 +886,7 @@ export default function ReconciliationAdminTab({ dateRange }: { dateRange: DateR
                                 <span className="font-semibold text-slate-600">Rider payments:</span> {fmt(stats.riderCost)} across {stats.riderPayoutCount} payment{stats.riderPayoutCount !== 1 ? 's' : ''} — lump-sum daily settlements, not per-order.
                             </span>
                             <span className="font-semibold text-slate-700">
-                                Fee Revenue = {fmt(stats.totalRevenue)} &nbsp;·&nbsp; Net Income = {fmt(stats.totalRevenue)} − {fmt(stats.riderCost)} − {fmt(stats.overheadExpenses)} = {fmt(stats.netIncome)}
+                                Gross Revenue = {fmt(stats.totalRevenue)} &nbsp;·&nbsp; Net Income = {fmt(stats.totalRevenue)} − {fmt(stats.couponDiscounts)} − {fmt(stats.riderCost)} − {fmt(stats.overheadExpenses)} = {fmt(stats.netIncome)}
                             </span>
                         </div>
                     </>

@@ -1,8 +1,8 @@
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
-import CitiesManager from '@/components/CitiesManager';
+import AttendanceManager from '@/components/AttendanceManager';
 
-export default async function CitiesPage() {
+export default async function AttendancePage() {
     const supabase = await createClient();
 
     const {
@@ -20,15 +20,13 @@ export default async function CitiesPage() {
         .single();
 
     if (profile?.role !== 'admin') {
-        redirect('/login');
+        redirect('/dashboard');
     }
 
     return (
-        <div className="max-w-7xl mx-auto">
-            <div className="mb-2">
-                <h1 className="text-2xl font-bold text-slate-900">Cities</h1>
-            </div>
-            <CitiesManager />
+        <div className="max-w-7xl mx-auto p-8">
+            <h1 className="text-3xl font-bold text-gray-900 mb-8">Rider Attendance</h1>
+            <AttendanceManager />
         </div>
     );
 }

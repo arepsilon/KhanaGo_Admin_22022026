@@ -1,6 +1,5 @@
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
-import Sidebar from '@/components/Sidebar';
 import RidersManagement from '@/components/RidersManagement';
 
 export default async function RidersPage() {
@@ -26,13 +25,8 @@ export default async function RidersPage() {
     }
 
     return (
-        <div className="flex min-h-screen bg-gray-50">
-            <Sidebar />
-            <main className="flex-1 p-8">
-                <div className="max-w-7xl mx-auto">
-                    <RidersManagement />
-                </div>
-            </main>
+        <div className="max-w-7xl mx-auto">
+            <RidersManagement />
         </div>
     );
 }

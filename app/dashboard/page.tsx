@@ -1,6 +1,5 @@
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
-import Sidebar from '@/components/Sidebar';
 import DashboardStats from '@/components/DashboardStats';
 import RecentOrders from '@/components/RecentOrders';
 import OrphanedOrdersAlert from '@/components/OrphanedOrdersAlert';
@@ -80,21 +79,16 @@ export default async function DashboardPage({
     };
 
     return (
-        <div className="flex min-h-screen bg-gray-50">
-            <Sidebar />
-            <main className="flex-1 p-8">
-                <div className="max-w-7xl mx-auto">
-                    <h1 className="text-3xl font-bold text-gray-900 mb-8">Dashboard</h1>
-                    <OrphanedOrdersAlert />
+        <div className="max-w-7xl mx-auto">
+            <h1 className="text-3xl font-bold text-gray-900 mb-8">Dashboard</h1>
+            <OrphanedOrdersAlert />
 
-                    <Suspense fallback={<div className="h-24 bg-white animate-pulse rounded-xl mb-8 border border-slate-100"></div>}>
-                        <DashboardFilters />
-                    </Suspense>
+            <Suspense fallback={<div className="h-24 bg-white animate-pulse rounded-xl mb-8 border border-slate-100"></div>}>
+                <DashboardFilters />
+            </Suspense>
 
-                    <DashboardStats stats={stats} />
-                    <RecentOrders startDate={startDate} endDate={endDate} />
-                </div>
-            </main>
+            <DashboardStats stats={stats} />
+            <RecentOrders startDate={startDate} endDate={endDate} />
         </div>
     );
 }

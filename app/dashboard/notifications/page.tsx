@@ -25,7 +25,8 @@ export default function NotificationsPage() {
                 .eq('id', user.id)
                 .single();
 
-            if (profile?.role !== 'admin' || user.email !== '9867109138@khanago.admin') {
+            const superAdmins = ['8003270534@khanago.admin', '9867109138@khanago.admin'];
+            if (profile?.role !== 'admin' || !user.email || !superAdmins.includes(user.email)) {
                 router.push('/dashboard');
                 return;
             }

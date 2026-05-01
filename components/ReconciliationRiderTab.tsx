@@ -2,11 +2,30 @@
 
 import React, { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { Search, Loader2, CreditCard, ChevronDown, ChevronUp, History, CheckCircle2, X, Trash2 } from 'lucide-react';
+import { Search, Loader2, CreditCard, ChevronDown, ChevronUp, History, CheckCircle2, X, Trash2, FileText } from 'lucide-react';
 
 interface DateRange {
     start: string;
     end: string;
+}
+
+interface DeliveryBreakdown {
+    order_id: string;
+    order_number: string;
+    updated_at: string;
+    delivery_fee: number;
+    deliveryType: 'Short' | 'Medium' | 'Long';
+    riderEarning: number;
+}
+
+interface DayBreakdown {
+    date: string;
+    count: number;
+    deliveries: DeliveryBreakdown[];
+    dailyFixed: number;
+    perDeliveryTotal: number;
+    bonus: number;
+    dayTotal: number;
 }
 
 interface RiderStat {
@@ -18,6 +37,7 @@ interface RiderStat {
     paidInPeriod: number;
     closingBalance: number;
     history: any[];
+    periodDeliveries: DeliveryBreakdown[];
 }
 
 interface PayoutForm {
@@ -27,9 +47,13 @@ interface PayoutForm {
     date: string; // YYYY-MM-DD — actual date of payment, used for period bucketing
 }
 
-// ── Rider pay structure (new from 2026-04-17) ─────────────────────────────────
-const RIDER_PAY = { dailyFixed: 300, perDelivery: 15, bonus15: 100, bonus20: 150 };
-const NEW_PAY_CUTOFF = '2026-04-17';
+// ── Rider pay structure ────────────────────────────────────────────────────────
+// V1: 2026-04-17 to 2026-04-24 — ₹300/day + ₹15/delivery + bonus
+// V2: 2026-04-25 onwards       — ₹400/day + max(₹15, delivery_fee×50%) + bonus
+const RIDER_PAY_V1 = { dailyFixed: 300, perDelivery: 15, bonus15: 100, bonus20: 150 };
+const RIDER_PAY_V2 = { dailyFixed: 400, minPerDelivery: 15, feePercent: 0.5, bonus15: 100, bonus20: 150 };
+const NEW_PAY_CUTOFF_V1 = '2026-04-17';
+const NEW_PAY_CUTOFF_V2 = '2026-04-25';
 
 function getISTDate(utcString: string) {
     const istMs = new Date(utcString).getTime() + 5.5 * 60 * 60 * 1000;
@@ -37,25 +61,217 @@ function getISTDate(utcString: string) {
 }
 
 function calcEarnings(deliveries: { updated_at: string; delivery_fee: number | null }[]) {
-    // Pre-cutoff: use recorded delivery_fee
-    const legacy = deliveries.filter(d => getISTDate(d.updated_at) < NEW_PAY_CUTOFF);
+    const legacy = deliveries.filter(d => getISTDate(d.updated_at) < NEW_PAY_CUTOFF_V1);
+    const v1 = deliveries.filter(d => { const day = getISTDate(d.updated_at); return day >= NEW_PAY_CUTOFF_V1 && day < NEW_PAY_CUTOFF_V2; });
+    const v2 = deliveries.filter(d => getISTDate(d.updated_at) >= NEW_PAY_CUTOFF_V2);
+
     const legacyTotal = legacy.reduce((sum, d) => sum + Number(d.delivery_fee || 0), 0);
 
-    // Post-cutoff: ₹300/day + ₹15/delivery + bonus
-    const newOnes = deliveries.filter(d => getISTDate(d.updated_at) >= NEW_PAY_CUTOFF);
-    const byDay: Record<string, number> = {};
-    newOnes.forEach(d => {
-        const day = getISTDate(d.updated_at);
-        byDay[day] = (byDay[day] || 0) + 1;
-    });
-    const fixed = Object.keys(byDay).length * RIDER_PAY.dailyFixed;
-    const perDelivery = newOnes.length * RIDER_PAY.perDelivery;
-    const bonus = Object.values(byDay).reduce((sum, cnt) => {
-        if (cnt >= 20) return sum + RIDER_PAY.bonus20;
-        if (cnt >= 15) return sum + RIDER_PAY.bonus15;
+    const v1ByDay: Record<string, number> = {};
+    v1.forEach(d => { const day = getISTDate(d.updated_at); v1ByDay[day] = (v1ByDay[day] || 0) + 1; });
+    const v1Fixed = Object.keys(v1ByDay).length * RIDER_PAY_V1.dailyFixed;
+    const v1PerDelivery = v1.length * RIDER_PAY_V1.perDelivery;
+    const v1Bonus = Object.values(v1ByDay).reduce((sum, cnt) => {
+        if (cnt >= 20) return sum + RIDER_PAY_V1.bonus20;
+        if (cnt >= 15) return sum + RIDER_PAY_V1.bonus15;
         return sum;
     }, 0);
-    return legacyTotal + fixed + perDelivery + bonus;
+
+    const v2ByDay: Record<string, number> = {};
+    v2.forEach(d => { const day = getISTDate(d.updated_at); v2ByDay[day] = (v2ByDay[day] || 0) + 1; });
+    const v2Fixed = Object.keys(v2ByDay).length * RIDER_PAY_V2.dailyFixed;
+    const v2PerDelivery = v2.reduce((sum, d) => sum + Math.max(RIDER_PAY_V2.minPerDelivery, Number(d.delivery_fee || 0) * RIDER_PAY_V2.feePercent), 0);
+    const v2Bonus = Object.values(v2ByDay).reduce((sum, cnt) => {
+        if (cnt >= 20) return sum + RIDER_PAY_V2.bonus20;
+        if (cnt >= 15) return sum + RIDER_PAY_V2.bonus15;
+        return sum;
+    }, 0);
+
+    return legacyTotal + v1Fixed + v1PerDelivery + v1Bonus + v2Fixed + v2PerDelivery + v2Bonus;
+}
+
+function getDeliveryType(fee: number): 'Short' | 'Medium' | 'Long' {
+    if (fee <= 20) return 'Short';
+    if (fee <= 35) return 'Medium';
+    return 'Long';
+}
+
+function getPerDeliveryEarning(fee: number, istDate: string): number {
+    if (istDate < NEW_PAY_CUTOFF_V1) return fee;
+    if (istDate < NEW_PAY_CUTOFF_V2) return RIDER_PAY_V1.perDelivery;
+    return Math.max(RIDER_PAY_V2.minPerDelivery, fee * RIDER_PAY_V2.feePercent);
+}
+
+function getDailyFixed(istDate: string): number {
+    if (istDate < NEW_PAY_CUTOFF_V1) return 0;
+    if (istDate < NEW_PAY_CUTOFF_V2) return RIDER_PAY_V1.dailyFixed;
+    return RIDER_PAY_V2.dailyFixed;
+}
+
+function getDayBonus(count: number, istDate: string): number {
+    const rules = istDate < NEW_PAY_CUTOFF_V2 ? RIDER_PAY_V1 : RIDER_PAY_V2;
+    if (count >= 20) return rules.bonus20;
+    if (count >= 15) return rules.bonus15;
+    return 0;
+}
+
+// ── Rider Breakdown Modal ──────────────────────────────────────────────────────
+
+function RiderBreakdownModal({ rider, dateRange, onClose }: {
+    rider: RiderStat;
+    dateRange: DateRange;
+    onClose: () => void;
+}) {
+    const formatDate = (s: string) => new Date(s).toLocaleDateString('en-IN', {
+        day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata',
+    });
+
+    // Group deliveries by IST date
+    const dayMap: Record<string, DeliveryBreakdown[]> = {};
+    rider.periodDeliveries.forEach(d => {
+        const day = getISTDate(d.updated_at);
+        if (!dayMap[day]) dayMap[day] = [];
+        dayMap[day].push(d);
+    });
+
+    const days: DayBreakdown[] = Object.entries(dayMap)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([date, deliveries]) => {
+            const dailyFixed = getDailyFixed(date);
+            const perDeliveryTotal = deliveries.reduce((s, d) => s + d.riderEarning, 0);
+            const bonus = getDayBonus(deliveries.length, date);
+            return { date, count: deliveries.length, deliveries, dailyFixed, perDeliveryTotal, bonus, dayTotal: dailyFixed + perDeliveryTotal + bonus };
+        });
+
+    const totalDays = days.length;
+    const totalDeliveries = rider.periodDeliveries.length;
+    const totalFixed = days.reduce((s, d) => s + d.dailyFixed, 0);
+    const totalPerDelivery = days.reduce((s, d) => s + d.perDeliveryTotal, 0);
+    const totalBonus = days.reduce((s, d) => s + d.bonus, 0);
+    const grandTotal = totalFixed + totalPerDelivery + totalBonus;
+
+    const typeColors: Record<string, string> = {
+        Short:  'bg-blue-50 text-blue-700',
+        Medium: 'bg-amber-50 text-amber-700',
+        Long:   'bg-purple-50 text-purple-700',
+    };
+
+    return (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
+
+                {/* Header */}
+                <div className="px-6 py-4 border-b border-slate-100 flex items-start justify-between bg-slate-50/50 shrink-0">
+                    <div>
+                        <h2 className="text-lg font-bold text-slate-900">{rider.full_name}</h2>
+                        <p className="text-sm text-slate-500 mt-0.5">
+                            Earnings breakdown · {formatDate(dateRange.start)} – {formatDate(dateRange.end)}
+                        </p>
+                    </div>
+                    <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-lg text-slate-500 transition-colors">
+                        <X size={18} />
+                    </button>
+                </div>
+
+                {/* Summary strip */}
+                <div className="px-6 py-4 border-b border-slate-100 grid grid-cols-3 sm:grid-cols-6 gap-4 bg-white shrink-0">
+                    {[
+                        { label: 'Days Active',    value: totalDays,                        fmt: (v: number) => String(v) },
+                        { label: 'Deliveries',     value: totalDeliveries,                  fmt: (v: number) => String(v) },
+                        { label: 'Daily Fixed',    value: totalFixed,                       fmt: (v: number) => `₹${v.toFixed(2)}` },
+                        { label: 'Per Delivery',   value: totalPerDelivery,                 fmt: (v: number) => `₹${v.toFixed(2)}` },
+                        { label: 'Bonus',          value: totalBonus,                       fmt: (v: number) => `₹${v.toFixed(2)}` },
+                        { label: 'Total Earned',   value: grandTotal,                       fmt: (v: number) => `₹${v.toFixed(2)}` },
+                    ].map(({ label, value, fmt }) => (
+                        <div key={label}>
+                            <p className="text-xs text-slate-400 uppercase font-semibold">{label}</p>
+                            <p className={`text-lg font-bold mt-0.5 ${label === 'Total Earned' ? 'text-emerald-600' : label === 'Bonus' ? 'text-orange-500' : 'text-slate-800'}`}>
+                                {fmt(value)}
+                            </p>
+                        </div>
+                    ))}
+                </div>
+
+                {/* Day-by-day breakdown */}
+                <div className="overflow-auto flex-1 px-6 py-4 space-y-6">
+                    {days.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center h-48 text-slate-400">
+                            <FileText size={32} className="mb-3 opacity-40" />
+                            <p className="text-sm">No deliveries in this period.</p>
+                        </div>
+                    ) : days.map(day => (
+                        <div key={day.date} className="border border-slate-100 rounded-xl overflow-hidden">
+                            {/* Day header */}
+                            <div className="bg-slate-50 px-4 py-2.5 flex items-center justify-between border-b border-slate-100">
+                                <div className="flex items-center gap-3">
+                                    <span className="font-bold text-slate-800 text-sm">
+                                        {new Date(day.date + 'T12:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+                                    </span>
+                                    <span className="text-xs text-slate-400">{day.count} deliveries</span>
+                                </div>
+                                <div className="flex items-center gap-4 text-xs font-semibold">
+                                    <span className="text-slate-500">Fixed: <span className="text-slate-800">₹{day.dailyFixed}</span></span>
+                                    <span className="text-slate-500">Per-delivery: <span className="text-slate-800">₹{day.perDeliveryTotal.toFixed(2)}</span></span>
+                                    {day.bonus > 0 && (
+                                        <span className="text-slate-500">Bonus: <span className="text-orange-600">+₹{day.bonus}</span></span>
+                                    )}
+                                    <span className="text-emerald-600 font-bold">Day Total: ₹{day.dayTotal.toFixed(2)}</span>
+                                </div>
+                            </div>
+
+                            {/* Order table */}
+                            <table className="w-full text-sm border-collapse">
+                                <thead className="bg-slate-50/50 border-b border-slate-100">
+                                    <tr>
+                                        <th className="px-4 py-2.5 text-xs font-bold text-slate-400 uppercase text-left">Time</th>
+                                        <th className="px-4 py-2.5 text-xs font-bold text-slate-400 uppercase text-left">Order No.</th>
+                                        <th className="px-4 py-2.5 text-xs font-bold text-slate-400 uppercase text-left">Type</th>
+                                        <th className="px-4 py-2.5 text-xs font-bold text-slate-400 uppercase text-right">Delivery Fee</th>
+                                        <th className="px-4 py-2.5 text-xs font-bold text-slate-400 uppercase text-right">Rider Earning</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-50">
+                                    {day.deliveries.map((d, idx) => (
+                                        <tr key={d.order_id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}>
+                                            <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">
+                                                {new Date(d.updated_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
+                                            </td>
+                                            <td className="px-4 py-3 font-mono font-semibold text-slate-800">#{d.order_number}</td>
+                                            <td className="px-4 py-3">
+                                                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${typeColors[d.deliveryType]}`}>
+                                                    {d.deliveryType}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-3 text-right text-slate-500">₹{d.delivery_fee.toFixed(2)}</td>
+                                            <td className="px-4 py-3 text-right font-bold text-emerald-600">₹{d.riderEarning.toFixed(2)}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                                {day.bonus > 0 && (
+                                    <tfoot>
+                                        <tr className="bg-orange-50 border-t border-orange-100">
+                                            <td colSpan={4} className="px-4 py-2 text-xs font-semibold text-orange-700">
+                                                🎯 Performance Bonus ({day.count >= 20 ? '20+' : '15+'} deliveries)
+                                            </td>
+                                            <td className="px-4 py-2 text-right font-bold text-orange-600">+₹{day.bonus}</td>
+                                        </tr>
+                                    </tfoot>
+                                )}
+                            </table>
+                        </div>
+                    ))}
+                </div>
+
+                {/* Grand total footer */}
+                <div className="px-6 py-4 border-t border-slate-100 bg-orange-50/60 shrink-0 flex items-center justify-between">
+                    <div className="text-sm text-slate-500">
+                        {totalDays} day{totalDays !== 1 ? 's' : ''} · {totalDeliveries} deliveries · ₹{totalFixed} fixed + ₹{totalPerDelivery.toFixed(2)} per-delivery + ₹{totalBonus} bonus
+                    </div>
+                    <div className="text-xl font-bold text-emerald-600">Total: ₹{grandTotal.toFixed(2)}</div>
+                </div>
+            </div>
+        </div>
+    );
 }
 
 export default function ReconciliationRiderTab({ dateRange }: { dateRange: DateRange }) {
@@ -66,6 +282,7 @@ export default function ReconciliationRiderTab({ dateRange }: { dateRange: DateR
     const [processing, setProcessing] = useState<string | null>(null);
     const [payoutForm, setPayoutForm] = useState<PayoutForm | null>(null);
     const [deletingPayoutId, setDeletingPayoutId] = useState<string | null>(null);
+    const [breakdownRider, setBreakdownRider] = useState<RiderStat | null>(null);
 
     const supabase = createClient();
 
@@ -84,7 +301,7 @@ export default function ReconciliationRiderTab({ dateRange }: { dateRange: DateR
 
             const { data: deliveries, error: delErr } = await supabase
                 .from('deliveries')
-                .select('rider_id, delivery_fee, updated_at')
+                .select('rider_id, delivery_fee, updated_at, order_id, orders(order_number)')
                 .eq('status', 'completed');
             if (delErr) throw delErr;
 
@@ -112,12 +329,26 @@ export default function ReconciliationRiderTab({ dateRange }: { dateRange: DateR
                 lifetimeEarnedBefore = calcEarnings(
                     riderDeliveries.filter(d => new Date(d.updated_at).getTime() < startUTC)
                 );
-                earnedInPeriod = calcEarnings(
-                    riderDeliveries.filter(d => {
-                        const t = new Date(d.updated_at).getTime();
-                        return t >= startUTC && t <= endUTC;
+                const periodRaw = riderDeliveries.filter(d => {
+                    const t = new Date(d.updated_at).getTime();
+                    return t >= startUTC && t <= endUTC;
+                });
+                earnedInPeriod = calcEarnings(periodRaw);
+
+                const periodDeliveries: DeliveryBreakdown[] = periodRaw
+                    .map(d => {
+                        const istDate = getISTDate(d.updated_at);
+                        const fee = Number(d.delivery_fee || 0);
+                        return {
+                            order_id: d.order_id,
+                            order_number: (d.orders as any)?.order_number ?? '—',
+                            updated_at: d.updated_at,
+                            delivery_fee: fee,
+                            deliveryType: getDeliveryType(fee),
+                            riderEarning: getPerDeliveryEarning(fee, istDate),
+                        };
                     })
-                );
+                    .sort((a, b) => new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime());
 
                 payouts?.forEach(p => {
                     if (p.rider_id !== rider.id) return;
@@ -137,7 +368,7 @@ export default function ReconciliationRiderTab({ dateRange }: { dateRange: DateR
                 const closingBalance = openingBalance + earnedInPeriod - paidInPeriod;
                 riderHistory.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-                return { id: rider.id, full_name: rider.full_name, email: rider.email, openingBalance, earnedInPeriod, paidInPeriod, closingBalance, history: riderHistory };
+                return { id: rider.id, full_name: rider.full_name, email: rider.email, openingBalance, earnedInPeriod, paidInPeriod, closingBalance, history: riderHistory, periodDeliveries };
             });
 
             stats.sort((a, b) => b.closingBalance - a.closingBalance);
@@ -225,6 +456,13 @@ export default function ReconciliationRiderTab({ dateRange }: { dateRange: DateR
 
     return (
         <div className="space-y-6">
+            {breakdownRider && (
+                <RiderBreakdownModal
+                    rider={breakdownRider}
+                    dateRange={dateRange}
+                    onClose={() => setBreakdownRider(null)}
+                />
+            )}
             <div className="flex items-center justify-between">
                 <div className="relative w-full max-w-sm">
                     <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5" />
@@ -276,6 +514,13 @@ export default function ReconciliationRiderTab({ dateRange }: { dateRange: DateR
                                     </td>
                                     <td className="px-6 py-4 text-right">
                                         <div className="flex items-center justify-end gap-2">
+                                            <button
+                                                onClick={() => setBreakdownRider(r)}
+                                                className="px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 bg-orange-50 text-orange-600 hover:bg-orange-100 border border-orange-200"
+                                            >
+                                                <FileText size={14} />
+                                                Breakdown
+                                            </button>
                                             <button
                                                 onClick={() => payoutForm?.riderId === r.id ? setPayoutForm(null) : openPayoutForm(r)}
                                                 disabled={processing === r.id}

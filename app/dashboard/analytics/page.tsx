@@ -1,6 +1,5 @@
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
-import Sidebar from '@/components/Sidebar';
 import AnalyticsDashboard from '@/components/AnalyticsDashboard';
 import DashboardFilters from '@/components/DashboardFilters';
 import { Suspense } from 'react';
@@ -28,8 +27,9 @@ export default async function AnalyticsPage({
         .eq('id', user.id)
         .single();
 
-    if (profile?.role !== 'admin') {
-        redirect('/login');
+    const superAdmins = ['8003270534@khanago.admin', '9867109138@khanago.admin'];
+    if (profile?.role !== 'admin' || !superAdmins.includes(user.email)) {
+        redirect('/dashboard');
     }
 
     // Get today's IST date as default (YYYY-MM-DD)
@@ -49,22 +49,17 @@ export default async function AnalyticsPage({
     const cityId = qCityId || null;
 
     return (
-        <div className="flex min-h-screen bg-gray-50">
-            <Sidebar />
-            <main className="flex-1 p-8">
-                <div className="max-w-7xl mx-auto">
-                    <h1 className="text-3xl font-bold text-gray-900 mb-8">Analytics & Insights</h1>
-                    <Suspense fallback={<div className="h-24 bg-white animate-pulse rounded-xl mb-8 border border-slate-100"></div>}>
-                        <DashboardFilters />
-                    </Suspense>
+        <div className="max-w-7xl mx-auto">
+            <h1 className="text-3xl font-bold text-gray-900 mb-8">Analytics & Insights</h1>
+            <Suspense fallback={<div className="h-24 bg-white animate-pulse rounded-xl mb-8 border border-slate-100"></div>}>
+                <DashboardFilters />
+            </Suspense>
 
-                    <AnalyticsDashboard 
-                        cityId={cityId} 
-                        startDate={startDate} 
-                        endDate={endDate} 
-                    />
-                </div>
-            </main>
+            <AnalyticsDashboard
+                cityId={cityId}
+                startDate={startDate}
+                endDate={endDate}
+            />
         </div>
     );
 }

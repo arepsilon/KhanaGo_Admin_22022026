@@ -29,6 +29,8 @@ interface OrderBreakdown {
     platformFee: number;
     transactionFee: number;  // transaction_charge_percent of orderTotal
     netPayable: number;
+    orderItems: string;
+    status: string;
 }
 
 interface RestaurantStat {
@@ -74,164 +76,225 @@ function BreakdownModal({
     const totalFee       = totalPlatFee + totalTxnFee;
     const totalNet       = restaurant.periodOrders.reduce((s, o) => s + o.netPayable, 0);
 
-    const handleDownloadPDF = () => {
+    const handleDownloadPDF = async () => {
         setExporting(true);
         try {
-            const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-            const pageWidth = pdf.internal.pageSize.getWidth();
+            // Load logo
+            const logoImg = new window.Image();
+            logoImg.src = '/khanago_logo.jpg';
+            await new Promise<void>((res) => { logoImg.onload = () => res(); logoImg.onerror = () => res(); });
+
+            const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+            const PW = pdf.internal.pageSize.getWidth();   // 297
+            const PH = pdf.internal.pageSize.getHeight();  // 210
+            const M  = 15; // margin
             let y = 0;
 
-            // Header band
+            // ── HEADER ──────────────────────────────────────────────────────────
+            // Orange top accent bar
             pdf.setFillColor(234, 88, 12);
-            pdf.rect(0, 0, pageWidth, 38, 'F');
-            pdf.setTextColor(255, 255, 255);
+            pdf.rect(0, 0, PW, 2.5, 'F');
+
+            // Header background
+            pdf.setFillColor(248, 250, 252);
+            pdf.rect(0, 2.5, PW, 42, 'F');
+
+            // Logo
+            try { pdf.addImage(logoImg, 'JPEG', M, 7, 28, 28); } catch (_) { /* silent */ }
+
+            // Brand
             pdf.setFont('helvetica', 'bold');
-            pdf.setFontSize(18);
-            pdf.text('Payment Breakdown', 15, 16);
-            pdf.setFontSize(11);
+            pdf.setFontSize(15);
+            pdf.setTextColor(234, 88, 12);
+            pdf.text('KhanaGO', M + 32, 17);
             pdf.setFont('helvetica', 'normal');
-            pdf.text(restaurant.name, 15, 26);
-            pdf.text(
-                `Period: ${formatDate(dateRange.start)} – ${formatDate(dateRange.end)}`,
-                pageWidth - 15, 16, { align: 'right' }
-            );
-            pdf.text(
-                `Generated: ${formatDate(new Date().toISOString())}`,
-                pageWidth - 15, 26, { align: 'right' }
-            );
+            pdf.setFontSize(8);
+            pdf.setTextColor(100, 116, 139);
+            pdf.text('Payment Statement', M + 32, 24);
 
-            y = 50;
-
-            // Summary
-            pdf.setTextColor(0, 0, 0);
+            // Right-side meta
             pdf.setFont('helvetica', 'bold');
-            pdf.setFontSize(12);
-            pdf.text('Summary', 15, y);
-            y += 8;
+            pdf.setFontSize(13);
+            pdf.setTextColor(15, 23, 42);
+            pdf.text('Payment Breakdown', PW - M, 14, { align: 'right' });
 
-            const summary = [
-                { label: 'Orders in Period',   value: restaurant.periodOrders.length.toString() },
-                { label: 'Total Order Value',  value: `Rs. ${totalOrderAmt.toFixed(2)}` },
-                { label: 'Total Base Amount',  value: `Rs. ${totalBase.toFixed(2)}` },
-                { label: 'Total Deductions',   value: `-Rs. ${totalFee.toFixed(2)}` },
-                { label: 'Net Payable',        value: `Rs. ${totalNet.toFixed(2)}` },
-            ];
-            pdf.setFontSize(9);
-            summary.forEach((item, idx) => {
-                const xPos = 15 + idx * 38;
-                pdf.setFont('helvetica', 'normal');
-                pdf.setTextColor(100, 100, 100);
-                pdf.text(item.label, xPos, y);
-                pdf.setFont('helvetica', 'bold');
-                pdf.setTextColor(idx === 2 ? 220 : idx === 3 ? 22 : 0, idx === 2 ? 38 : idx === 3 ? 163 : 0, 0);
-                pdf.text(item.value, xPos, y + 6);
-            });
-            y += 20;
-
-            // Deduction note
-            pdf.setTextColor(71, 85, 105);
             pdf.setFont('helvetica', 'normal');
             pdf.setFontSize(8.5);
+            pdf.setTextColor(71, 85, 105);
+            pdf.text(restaurant.name, PW - M, 22, { align: 'right' });
+            pdf.setFontSize(7.5);
+            pdf.text(`Period: ${formatDate(dateRange.start)} – ${formatDate(dateRange.end)}`, PW - M, 29, { align: 'right' });
+            pdf.text(`Generated: ${formatDate(new Date().toISOString())}`, PW - M, 35, { align: 'right' });
+
+            // Header bottom divider
+            pdf.setDrawColor(226, 232, 240);
+            pdf.setLineWidth(0.4);
+            pdf.line(M, 44.5, PW - M, 44.5);
+
+            y = 53;
+
+            // ── SUMMARY CARDS ────────────────────────────────────────────────────
+            pdf.setFont('helvetica', 'bold');
+            pdf.setFontSize(6.5);
+            pdf.setTextColor(148, 163, 184);
+            pdf.text('SUMMARY', M, y - 4);
+
+            const cards = [
+                { label: 'Orders in Period',  value: restaurant.periodOrders.length.toString(), r: 15,  g: 23,  b: 42  },
+                { label: 'Total Base Amount', value: `Rs. ${totalBase.toFixed(2)}`,             r: 15,  g: 23,  b: 42  },
+                { label: 'Total Deductions',  value: `-Rs. ${totalFee.toFixed(2)}`,             r: 220, g: 38,  b: 38  },
+                { label: 'Net Payable',       value: `Rs. ${totalNet.toFixed(2)}`,              r: 22,  g: 163, b: 74  },
+            ];
+            const cardW = (PW - M * 2 - 6) / cards.length;
+            cards.forEach((c, i) => {
+                const cx = M + i * (cardW + 1.5);
+                pdf.setFillColor(255, 255, 255);
+                pdf.setDrawColor(226, 232, 240);
+                pdf.setLineWidth(0.3);
+                pdf.roundedRect(cx, y, cardW, 22, 1.5, 1.5, 'FD');
+                // top accent stripe
+                pdf.setFillColor(234, 88, 12);
+                pdf.roundedRect(cx, y, cardW, 2, 1.5, 1.5, 'F');
+                pdf.rect(cx, y + 0.8, cardW, 1.2, 'F'); // flatten bottom of top accent
+                // label
+                pdf.setFont('helvetica', 'normal');
+                pdf.setFontSize(6.5);
+                pdf.setTextColor(100, 116, 139);
+                pdf.text(c.label, cx + cardW / 2, y + 9, { align: 'center' });
+                // value
+                pdf.setFont('helvetica', 'bold');
+                pdf.setFontSize(9.5);
+                pdf.setTextColor(c.r, c.g, c.b);
+                pdf.text(c.value, cx + cardW / 2, y + 17, { align: 'center' });
+            });
+            y += 28;
+
+            // Deduction breakdown note
             const deductionParts: string[] = [];
             if (restaurant.platform_fee_per_order > 0)
-                deductionParts.push(`Platform fee: Rs.${restaurant.platform_fee_per_order.toFixed(2)}/order × ${restaurant.periodOrders.length} = Rs.${totalPlatFee.toFixed(2)}`);
+                deductionParts.push(`Platform fee: Rs.${restaurant.platform_fee_per_order.toFixed(2)}/order × ${restaurant.periodOrders.length} orders = Rs.${totalPlatFee.toFixed(2)}`);
             if (restaurant.transaction_charge_percent > 0)
                 deductionParts.push(`Transaction charge: ${restaurant.transaction_charge_percent}% of order total = Rs.${totalTxnFee.toFixed(2)}`);
             if (deductionParts.length > 0) {
-                pdf.text('Deductions: ' + deductionParts.join('   |   '), 15, y);
-                y += 10;
+                pdf.setFillColor(255, 247, 237);
+                pdf.setDrawColor(253, 186, 116);
+                pdf.setLineWidth(0.3);
+                pdf.roundedRect(M, y - 3, PW - M * 2, 9, 1.5, 1.5, 'FD');
+                pdf.setFont('helvetica', 'normal');
+                pdf.setFontSize(7);
+                pdf.setTextColor(154, 52, 18);
+                pdf.text('Deductions:  ' + deductionParts.join('   |   '), M + 4, y + 2.5);
+                y += 13;
             }
 
-            // Table
-            pdf.setTextColor(0, 0, 0);
+            // ── TABLE ────────────────────────────────────────────────────────────
             pdf.setFont('helvetica', 'bold');
-            pdf.setFontSize(12);
-            pdf.text('Order Breakdown', 15, y);
-            y += 8;
+            pdf.setFontSize(6.5);
+            pdf.setTextColor(148, 163, 184);
+            pdf.text('ORDER BREAKDOWN', M, y);
+            y += 5;
 
-            const COL = { date: 15, order: 47, orderTotal: 71, base: 97, pFee: 124, txnFee: 149, net: 173 };
+            const COL = { date: M + 4, order: M + 35, items: M + 87, base: M + 187, pFee: M + 213, net: M + 247 };
 
             const drawTableHeader = () => {
                 pdf.setFillColor(241, 245, 249);
-                pdf.rect(15, y - 5, pageWidth - 30, 9, 'F');
+                pdf.rect(M, y - 4.5, PW - M * 2, 9, 'F');
+                pdf.setFillColor(234, 88, 12);
+                pdf.rect(M, y - 4.5, 2, 9, 'F');
                 pdf.setFont('helvetica', 'bold');
-                pdf.setFontSize(7.5);
+                pdf.setFontSize(7);
                 pdf.setTextColor(71, 85, 105);
-                pdf.text('Date',         COL.date,       y);
-                pdf.text('Order #',      COL.order,      y);
-                pdf.text('Order Total',  COL.orderTotal, y);
-                pdf.text('Base Amt',     COL.base,       y);
-                pdf.text('Plat. Fee',    COL.pFee,       y);
-                pdf.text('Txn Fee',      COL.txnFee,     y);
-                pdf.text('Payable',      COL.net,        y);
+                pdf.text('DATE',                COL.date,  y);
+                pdf.text('ORDER #',             COL.order, y);
+                pdf.text('ORDER ITEMS',         COL.items, y);
+                pdf.text('BASE AMT',            COL.base,  y);
+                pdf.text('PLAT. FEE DEDUCT.',   COL.pFee,  y);
+                pdf.text('TOTAL PAYABLE',       COL.net,   y);
                 y += 7;
             };
 
             drawTableHeader();
-            pdf.setFont('helvetica', 'normal');
-            pdf.setFontSize(8);
+
+            const LINE_H = 4.5;
+            const ROW_PAD = 3;
 
             restaurant.periodOrders.forEach((order, idx) => {
-                if (y > 270) { pdf.addPage(); y = 20; drawTableHeader(); }
+                const itemsText: string[] = pdf.splitTextToSize(order.orderItems, COL.base - COL.items - 5);
+                const rowH = ROW_PAD * 2 + Math.max(1, itemsText.length) * LINE_H;
+
+                if (y + rowH > PH - 16) { pdf.addPage(); y = 20; drawTableHeader(); }
+
+                // Row bg
                 if (idx % 2 === 0) {
-                    pdf.setFillColor(249, 250, 251);
-                    pdf.rect(15, y - 4, pageWidth - 30, 7, 'F');
+                    pdf.setFillColor(250, 251, 252);
+                    pdf.rect(M, y - ROW_PAD, PW - M * 2, rowH, 'F');
                 }
+                // Row bottom rule
+                pdf.setDrawColor(241, 245, 249);
+                pdf.setLineWidth(0.2);
+                pdf.line(M, y - ROW_PAD + rowH, PW - M, y - ROW_PAD + rowH);
+
                 pdf.setFont('helvetica', 'normal');
                 pdf.setFontSize(7.5);
-                pdf.setTextColor(30, 30, 30);
-                pdf.text(formatDate(order.created_at), COL.date, y);
-                pdf.text(`#${order.order_number ?? '—'}`, COL.order, y);
                 pdf.setTextColor(51, 65, 85);
-                pdf.text(`Rs. ${order.orderTotal.toFixed(2)}`, COL.orderTotal, y);
-                pdf.setTextColor(0, 0, 0);
+                pdf.text(formatDate(order.created_at), COL.date, y);
+
+                pdf.setTextColor(100, 116, 139);
+                pdf.text(`#${order.order_number ?? '—'}`, COL.order, y);
+
+                pdf.setTextColor(30, 41, 59);
+                pdf.text(itemsText, COL.items, y, { lineHeightFactor: LINE_H / 2.8 });
+
+                pdf.setTextColor(15, 23, 42);
                 pdf.text(`Rs. ${order.baseTotal.toFixed(2)}`, COL.base, y);
+
                 pdf.setTextColor(220, 38, 38);
-                pdf.text(order.platformFee > 0 ? `-Rs. ${order.platformFee.toFixed(2)}` : '—', COL.pFee, y);
-                pdf.text(order.transactionFee > 0 ? `-Rs. ${order.transactionFee.toFixed(2)}` : '—', COL.txnFee, y);
+                const totalDeduction = order.platformFee + order.transactionFee;
+                pdf.text(totalDeduction > 0 ? `-Rs. ${totalDeduction.toFixed(2)}` : '—', COL.pFee, y);
+
+                pdf.setFont('helvetica', 'bold');
                 pdf.setTextColor(22, 163, 74);
                 pdf.text(`Rs. ${order.netPayable.toFixed(2)}`, COL.net, y);
-                y += 7;
+
+                y += rowH;
             });
 
             if (restaurant.periodOrders.length === 0) {
-                pdf.setTextColor(150, 150, 150);
+                pdf.setTextColor(148, 163, 184);
                 pdf.setFont('helvetica', 'italic');
                 pdf.setFontSize(9);
-                pdf.text('No orders in this period.', 15, y);
+                pdf.text('No orders in this period.', M, y);
                 y += 8;
             }
 
             // Totals row
             y += 2;
             pdf.setFillColor(234, 88, 12);
-            pdf.rect(15, y - 5, pageWidth - 30, 9, 'F');
+            pdf.rect(M, y - 4, PW - M * 2, 10, 'F');
             pdf.setFont('helvetica', 'bold');
-            pdf.setFontSize(7.5);
+            pdf.setFontSize(8);
             pdf.setTextColor(255, 255, 255);
-            pdf.text('TOTAL',                                  COL.date,       y);
-            pdf.text(`Rs. ${totalOrderAmt.toFixed(2)}`,       COL.orderTotal, y);
-            pdf.text(`Rs. ${totalBase.toFixed(2)}`,           COL.base,       y);
-            pdf.text(`-Rs. ${totalPlatFee.toFixed(2)}`,       COL.pFee,       y);
-            pdf.text(`-Rs. ${totalTxnFee.toFixed(2)}`,        COL.txnFee,     y);
-            pdf.text(`Rs. ${totalNet.toFixed(2)}`,            COL.net,        y);
+            pdf.text('TOTAL',                            COL.date, y + 1);
+            pdf.text(`Rs. ${totalBase.toFixed(2)}`,     COL.base, y + 1);
+            pdf.text(`-Rs. ${totalFee.toFixed(2)}`,     COL.pFee, y + 1);
+            pdf.text(`Rs. ${totalNet.toFixed(2)}`,      COL.net,  y + 1);
 
-            // Page footers
+            // ── PAGE FOOTERS ─────────────────────────────────────────────────────
             const pageCount = (pdf as any).internal.getNumberOfPages();
             for (let i = 1; i <= pageCount; i++) {
                 pdf.setPage(i);
+                pdf.setDrawColor(226, 232, 240);
+                pdf.setLineWidth(0.3);
+                pdf.line(M, PH - 11, PW - M, PH - 11);
                 pdf.setFont('helvetica', 'normal');
-                pdf.setFontSize(7);
-                pdf.setTextColor(150, 150, 150);
-                pdf.text(
-                    `Page ${i} of ${pageCount}  •  Payment terms effective from 9 Apr 2026`,
-                    pageWidth / 2,
-                    pdf.internal.pageSize.getHeight() - 8,
-                    { align: 'center' }
-                );
+                pdf.setFontSize(6.5);
+                pdf.setTextColor(148, 163, 184);
+                pdf.text('KhanaGO  •  Confidential Payment Statement', M, PH - 6.5);
+                pdf.text('Payment terms effective from 9 Apr 2026', PW / 2, PH - 6.5, { align: 'center' });
+                pdf.text(`Page ${i} of ${pageCount}`, PW - M, PH - 6.5, { align: 'right' });
             }
 
-            pdf.save(`Breakdown_${restaurant.name.replace(/\s+/g, '_')}_${dateRange.start}_to_${dateRange.end}.pdf`);
+            pdf.save(`KhanaGO_Breakdown_${restaurant.name.replace(/\s+/g, '_')}_${dateRange.start}_to_${dateRange.end}.pdf`);
         } catch (err) {
             console.error('PDF export error:', err);
             alert('Failed to export PDF.');
@@ -310,43 +373,44 @@ function BreakdownModal({
                         <table className="w-full text-left text-sm border-collapse">
                             <thead className="sticky top-0 bg-slate-50 border-b border-slate-100 z-10">
                                 <tr>
-                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">#</th>
-                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">Date</th>
-                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">Order No.</th>
-                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Order Total</th>
-                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Base Amount</th>
-                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Plat. Fee</th>
-                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Txn Fee ({restaurant.transaction_charge_percent}%)</th>
-                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Payable</th>
+                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-28">Date</th>
+                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-36">Order No.</th>
+                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">Order Items</th>
+                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right w-32">Base Amount</th>
+                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right w-40">Platform Fee Deduction</th>
+                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right w-32">Total Payable</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-50">
                                 {restaurant.periodOrders.map((order, idx) => (
                                     <tr key={order.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}>
-                                        <td className="px-4 py-3 text-slate-400 text-xs">{idx + 1}</td>
-                                        <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{formatDate(order.created_at)}</td>
-                                        <td className="px-4 py-3 font-mono font-semibold text-slate-800">
+                                        <td className="px-4 py-5 text-slate-600 whitespace-nowrap align-top">{formatDate(order.created_at)}</td>
+                                        <td className="px-4 py-5 font-mono font-semibold text-slate-800 align-top">
                                             #{order.order_number ?? '—'}
+                                            {order.status === 'wastage' && (
+                                                <div className="mt-1">
+                                                    <span className="inline-block px-1.5 py-0.5 text-[9px] font-bold text-amber-700 bg-amber-100 rounded-sm">
+                                                        WASTAGE
+                                                    </span>
+                                                </div>
+                                            )}
                                         </td>
-                                        <td className="px-4 py-3 text-right text-slate-600">₹{order.orderTotal.toFixed(2)}</td>
-                                        <td className="px-4 py-3 text-right text-slate-700">₹{order.baseTotal.toFixed(2)}</td>
-                                        <td className="px-4 py-3 text-right text-red-500 font-medium">
-                                            {order.platformFee > 0 ? `-₹${order.platformFee.toFixed(2)}` : <span className="text-slate-300">—</span>}
+                                        <td className="px-4 py-5 text-slate-600 text-xs max-w-xs align-top whitespace-normal break-words leading-relaxed">{order.orderItems}</td>
+                                        <td className="px-4 py-5 text-right text-slate-700 align-top">₹{order.baseTotal.toFixed(2)}</td>
+                                        <td className="px-4 py-5 text-right text-red-500 font-medium align-top">
+                                            {(order.platformFee + order.transactionFee) > 0
+                                                ? `-₹${(order.platformFee + order.transactionFee).toFixed(2)}`
+                                                : <span className="text-slate-300">—</span>}
                                         </td>
-                                        <td className="px-4 py-3 text-right text-red-500 font-medium">
-                                            {order.transactionFee > 0 ? `-₹${order.transactionFee.toFixed(2)}` : <span className="text-slate-300">—</span>}
-                                        </td>
-                                        <td className="px-4 py-3 text-right font-bold text-emerald-600">₹{order.netPayable.toFixed(2)}</td>
+                                        <td className="px-4 py-5 text-right font-bold text-emerald-600 align-top">₹{order.netPayable.toFixed(2)}</td>
                                     </tr>
                                 ))}
                             </tbody>
                             <tfoot className="sticky bottom-0 bg-orange-50 border-t-2 border-orange-200">
                                 <tr>
                                     <td colSpan={3} className="px-4 py-3 font-bold text-slate-700 text-sm">Total</td>
-                                    <td className="px-4 py-3 text-right font-bold text-slate-600">₹{totalOrderAmt.toFixed(2)}</td>
                                     <td className="px-4 py-3 text-right font-bold text-slate-800">₹{totalBase.toFixed(2)}</td>
-                                    <td className="px-4 py-3 text-right font-bold text-red-500">-₹{totalPlatFee.toFixed(2)}</td>
-                                    <td className="px-4 py-3 text-right font-bold text-red-500">-₹{totalTxnFee.toFixed(2)}</td>
+                                    <td className="px-4 py-3 text-right font-bold text-red-500">-₹{totalFee.toFixed(2)}</td>
                                     <td className="px-6 py-3 text-right font-bold text-emerald-600 text-base">₹{totalNet.toFixed(2)}</td>
                                 </tr>
                             </tfoot>
@@ -395,9 +459,12 @@ export default function ReconciliationRestaurantTab({ dateRange }: { dateRange: 
                     platform_fee,
                     delivery_fee,
                     created_at,
-                    order_items(quantity, unit_price, base_price)
+                    status,
+                    order_items(quantity, unit_price, base_price, menu_item:menu_items(name))
                 `)
-                .in('status', ['delivered', 'completed']);
+                .in('status', ['delivered', 'completed', 'wastage'])
+                .gte('created_at', '2026-04-09T00:00:00.000Z')
+                .limit(10000);
             if (ordErr) throw ordErr;
 
             const { data: payouts, error: payErr } = await supabase
@@ -448,6 +515,9 @@ export default function ReconciliationRestaurantTab({ dateRange }: { dateRange: 
                         lifetimeEarnedBefore += netEarnedForOrder;
                     } else if (t >= startUTC && t <= endUTC) {
                         earnedInPeriod += netEarnedForOrder;
+                        const orderItems = (o.order_items && o.order_items.length > 0)
+                            ? o.order_items.map((item: any) => `${item.menu_item?.name ?? 'Item'} ×${item.quantity}`).join(', ')
+                            : '—';
                         periodOrders.push({
                             id: o.id,
                             order_number: o.order_number,
@@ -457,6 +527,8 @@ export default function ReconciliationRestaurantTab({ dateRange }: { dateRange: 
                             platformFee: pFee,
                             transactionFee,
                             netPayable: netEarnedForOrder,
+                            orderItems,
+                            status: o.status,
                         });
                     }
                 });

@@ -1,6 +1,5 @@
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
-import Sidebar from '@/components/Sidebar';
 import OrdersTable from '@/components/OrdersTable';
 
 export default async function OrdersPage() {
@@ -26,14 +25,9 @@ export default async function OrdersPage() {
     }
 
     return (
-        <div className="flex min-h-screen bg-gray-50">
-            <Sidebar />
-            <main className="flex-1 p-8">
-                <div className="max-w-7xl mx-auto">
-                    <h1 className="text-3xl font-bold text-gray-900 mb-8">Orders Management</h1>
-                    <OrdersTable />
-                </div>
-            </main>
+        <div className="max-w-7xl mx-auto">
+            <h1 className="text-3xl font-bold text-gray-900 mb-8">Orders Management</h1>
+            <OrdersTable />
         </div>
     );
 }
