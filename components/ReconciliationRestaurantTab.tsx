@@ -253,6 +253,8 @@ function BreakdownModal({
     onClose: () => void;
 }) {
     const [exporting, setExporting] = useState(false);
+    const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
+    const supabase = createClient();
 
     const formatDate = (dateStr: string) => {
         if (!dateStr) return '';
@@ -271,43 +273,85 @@ function BreakdownModal({
     const totalFee       = totalPlatFee + totalTxnFee;
     const totalNet       = restaurant.periodOrders.reduce((s, o) => s + o.netPayable, 0);
 
-    const handleSendWhatsApp = () => {
+    const handleSendWhatsApp = async () => {
         const number = restaurant.whatsapp_number;
         if (!number) {
             alert('No WhatsApp number saved for this restaurant. Add it via the "Payment Details" button.');
             return;
         }
 
-        const fmt = (n: number) => `Rs. ${n.toFixed(2)}`;
-        const lines = [
-            `*KhanaGO — Payment Statement*`,
-            `*${restaurant.name}*`,
-            `Period: ${formatDate(dateRange.start)} – ${formatDate(dateRange.end)}`,
-            ``,
-            `Orders: ${restaurant.periodOrders.length}`,
-            `Total Base Amount: ${fmt(totalBase)}`,
-            `Platform Fee: -${fmt(totalPlatFee)}`,
-            `Transaction Charge: -${fmt(totalTxnFee)}`,
-            `Total Deductions: -${fmt(totalFee)}`,
-            ``,
-            `*Net Payable: ${fmt(totalNet)}*`,
-            ``,
-            `Please find the detailed PDF statement attached separately.`,
-        ];
-        const message = encodeURIComponent(lines.join('\n'));
-        const url = `https://wa.me/${number}?text=${message}`;
-        window.open(url, '_blank', 'noopener,noreferrer');
+        // Open a tab synchronously (inside the user gesture) so popup blockers don't kill it.
+        // We'll set its location later once the upload completes.
+        const waTab = window.open('about:blank', '_blank');
+
+        setSendingWhatsApp(true);
+        try {
+            // 1. Build the PDF
+            const pdf = await buildPDF();
+            const pdfBlob: Blob = pdf.output('blob');
+
+            // 2. Upload to storage with an unguessable path
+            const randomId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+                ? crypto.randomUUID()
+                : Math.random().toString(36).slice(2) + Date.now().toString(36);
+            const path = `${restaurant.id}/${dateRange.start}_to_${dateRange.end}/${randomId}.pdf`;
+
+            const { error: uploadErr } = await supabase.storage
+                .from('payment-statements')
+                .upload(path, pdfBlob, {
+                    contentType: 'application/pdf',
+                    cacheControl: '31536000',
+                    upsert: false,
+                });
+            if (uploadErr) throw uploadErr;
+
+            // 3. Get the public URL (bucket is public, unguessable filename = security)
+            const { data: urlData } = supabase.storage
+                .from('payment-statements')
+                .getPublicUrl(path);
+            const pdfUrl = urlData.publicUrl;
+
+            // 4. Build WhatsApp message with the link
+            const fmt = (n: number) => `Rs. ${n.toFixed(2)}`;
+            const lines = [
+                `*KhanaGO — Payment Statement*`,
+                `*${restaurant.name}*`,
+                `Period: ${formatDate(dateRange.start)} – ${formatDate(dateRange.end)}`,
+                ``,
+                `Orders: ${restaurant.periodOrders.length}`,
+                `Total Base Amount: ${fmt(totalBase)}`,
+                `Total Deductions: -${fmt(totalFee)}`,
+                ``,
+                `*Net Payable: ${fmt(totalNet)}*`,
+                ``,
+                `Detailed PDF statement:`,
+                pdfUrl,
+            ];
+            const message = encodeURIComponent(lines.join('\n'));
+            const waUrl = `https://wa.me/${number}?text=${message}`;
+
+            if (waTab) {
+                waTab.location.href = waUrl;
+            } else {
+                window.open(waUrl, '_blank', 'noopener,noreferrer');
+            }
+        } catch (err: any) {
+            console.error('WhatsApp send error:', err);
+            if (waTab) waTab.close();
+            alert('Failed to prepare WhatsApp message: ' + (err?.message || 'unknown error'));
+        } finally {
+            setSendingWhatsApp(false);
+        }
     };
 
-    const handleDownloadPDF = async () => {
-        setExporting(true);
-        try {
-            // Load logo
-            const logoImg = new window.Image();
-            logoImg.src = '/khanago_logo.jpg';
-            await new Promise<void>((res) => { logoImg.onload = () => res(); logoImg.onerror = () => res(); });
+    // Build the PDF document and return the jsPDF instance (used by both download + WhatsApp send)
+    const buildPDF = async (): Promise<jsPDF> => {
+        // Load logo
+        const logoImg = new window.Image();
+        logoImg.src = '/khanago_logo.jpg';
+        await new Promise<void>((res) => { logoImg.onload = () => res(); logoImg.onerror = () => res(); });
 
-            const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+        const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
             const PW = pdf.internal.pageSize.getWidth();   // 297
             const PH = pdf.internal.pageSize.getHeight();  // 210
             const M  = 15; // margin
@@ -517,7 +561,16 @@ function BreakdownModal({
                 pdf.text(`Page ${i} of ${pageCount}`, PW - M, PH - 6.5, { align: 'right' });
             }
 
-            pdf.save(`KhanaGO_Breakdown_${restaurant.name.replace(/\s+/g, '_')}_${dateRange.start}_to_${dateRange.end}.pdf`);
+            return pdf;
+    };
+
+    const pdfFileName = () => `KhanaGO_Breakdown_${restaurant.name.replace(/\s+/g, '_')}_${dateRange.start}_to_${dateRange.end}.pdf`;
+
+    const handleDownloadPDF = async () => {
+        setExporting(true);
+        try {
+            const pdf = await buildPDF();
+            pdf.save(pdfFileName());
         } catch (err) {
             console.error('PDF export error:', err);
             alert('Failed to export PDF.');
@@ -541,14 +594,15 @@ function BreakdownModal({
                     <div className="flex items-center gap-2">
                         <button
                             onClick={handleSendWhatsApp}
-                            disabled={!restaurant.whatsapp_number}
+                            disabled={!restaurant.whatsapp_number || sendingWhatsApp}
                             title={restaurant.whatsapp_number
-                                ? `Send summary to +${restaurant.whatsapp_number}`
+                                ? `Send PDF link to +${restaurant.whatsapp_number}`
                                 : 'No WhatsApp number saved — add it in Payment Details'}
                             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-bold bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                         >
-                            <MessageCircle size={15} />
-                            Send via WhatsApp
+                            {sendingWhatsApp
+                                ? <><Loader2 className="w-4 h-4 animate-spin" /> Preparing…</>
+                                : <><MessageCircle size={15} /> Send via WhatsApp</>}
                         </button>
                         <button
                             onClick={handleDownloadPDF}
