@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import {
     Search, Loader2, CreditCard, ChevronDown, ChevronUp,
-    History, CheckCircle2, FileText, Download, X, Trash2, Wallet
+    History, CheckCircle2, FileText, Download, X, Trash2, Wallet, MessageCircle
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 
@@ -50,6 +50,7 @@ interface RestaurantStat {
     bank_account_number: string | null;
     bank_ifsc_code: string | null;
     bank_name: string | null;
+    whatsapp_number: string | null;
 }
 
 type PaymentDetailsForm = {
@@ -61,7 +62,16 @@ type PaymentDetailsForm = {
     bank_account_number: string;
     bank_ifsc_code: string;
     bank_name: string;
+    whatsapp_number: string;
 };
+
+// Strip non-digits and ensure country code (default to India 91 if 10-digit)
+function normalizeWhatsAppNumber(raw: string): string {
+    const digits = (raw || '').replace(/\D/g, '');
+    if (!digits) return '';
+    if (digits.length === 10) return '91' + digits;
+    return digits;
+}
 
 // ─── Payment Details Modal ───────────────────────────────────────────────────
 
@@ -135,6 +145,24 @@ function PaymentDetailsModal({
                         </div>
                     </div>
 
+                    <div>
+                        <label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1.5">
+                            <MessageCircle size={12} className="text-emerald-600" />
+                            WhatsApp Number
+                        </label>
+                        <input
+                            type="tel"
+                            inputMode="tel"
+                            placeholder="10-digit number (e.g. 9876543210)"
+                            value={form.whatsapp_number}
+                            onChange={e => onChange({ ...form, whatsapp_number: e.target.value })}
+                            className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:ring-2 focus:ring-orange-400 focus:border-orange-400 outline-none"
+                        />
+                        <p className="text-[11px] text-slate-400 mt-1">Used to send payment statements. Country code 91 added automatically for 10-digit numbers.</p>
+                    </div>
+
+                    <div className="border-t border-slate-100"></div>
+
                     {isUpi ? (
                         <div>
                             <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">UPI ID *</label>
@@ -144,7 +172,6 @@ function PaymentDetailsModal({
                                 value={form.upi_id}
                                 onChange={e => onChange({ ...form, upi_id: e.target.value })}
                                 className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:ring-2 focus:ring-orange-400 focus:border-orange-400 outline-none"
-                                autoFocus
                             />
                         </div>
                     ) : (
@@ -243,6 +270,34 @@ function BreakdownModal({
     const totalTxnFee    = restaurant.periodOrders.reduce((s, o) => s + o.transactionFee, 0);
     const totalFee       = totalPlatFee + totalTxnFee;
     const totalNet       = restaurant.periodOrders.reduce((s, o) => s + o.netPayable, 0);
+
+    const handleSendWhatsApp = () => {
+        const number = restaurant.whatsapp_number;
+        if (!number) {
+            alert('No WhatsApp number saved for this restaurant. Add it via the "Payment Details" button.');
+            return;
+        }
+
+        const fmt = (n: number) => `Rs. ${n.toFixed(2)}`;
+        const lines = [
+            `*KhanaGO — Payment Statement*`,
+            `*${restaurant.name}*`,
+            `Period: ${formatDate(dateRange.start)} – ${formatDate(dateRange.end)}`,
+            ``,
+            `Orders: ${restaurant.periodOrders.length}`,
+            `Total Base Amount: ${fmt(totalBase)}`,
+            `Platform Fee: -${fmt(totalPlatFee)}`,
+            `Transaction Charge: -${fmt(totalTxnFee)}`,
+            `Total Deductions: -${fmt(totalFee)}`,
+            ``,
+            `*Net Payable: ${fmt(totalNet)}*`,
+            ``,
+            `Please find the detailed PDF statement attached separately.`,
+        ];
+        const message = encodeURIComponent(lines.join('\n'));
+        const url = `https://wa.me/${number}?text=${message}`;
+        window.open(url, '_blank', 'noopener,noreferrer');
+    };
 
     const handleDownloadPDF = async () => {
         setExporting(true);
@@ -485,6 +540,17 @@ function BreakdownModal({
                     </div>
                     <div className="flex items-center gap-2">
                         <button
+                            onClick={handleSendWhatsApp}
+                            disabled={!restaurant.whatsapp_number}
+                            title={restaurant.whatsapp_number
+                                ? `Send summary to +${restaurant.whatsapp_number}`
+                                : 'No WhatsApp number saved — add it in Payment Details'}
+                            className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-bold bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                        >
+                            <MessageCircle size={15} />
+                            Send via WhatsApp
+                        </button>
+                        <button
                             onClick={handleDownloadPDF}
                             disabled={exporting}
                             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-bold bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-60 transition-all"
@@ -615,7 +681,7 @@ export default function ReconciliationRestaurantTab({ dateRange }: { dateRange: 
         try {
             const { data: restsData, error: restErr } = await supabase
                 .from('restaurants')
-                .select('id, name, platform_fee_per_order, transaction_charge_percent, payment_mode, upi_id, bank_account_name, bank_account_number, bank_ifsc_code, bank_name');
+                .select('id, name, platform_fee_per_order, transaction_charge_percent, payment_mode, upi_id, bank_account_name, bank_account_number, bank_ifsc_code, bank_name, whatsapp_number');
             if (restErr) throw restErr;
 
             const { data: orders, error: ordErr } = await supabase
@@ -741,6 +807,7 @@ export default function ReconciliationRestaurantTab({ dateRange }: { dateRange: 
                     bank_account_number: (restaurant as any).bank_account_number ?? null,
                     bank_ifsc_code: (restaurant as any).bank_ifsc_code ?? null,
                     bank_name: (restaurant as any).bank_name ?? null,
+                    whatsapp_number: (restaurant as any).whatsapp_number ?? null,
                 };
             });
 
@@ -781,6 +848,7 @@ export default function ReconciliationRestaurantTab({ dateRange }: { dateRange: 
             bank_account_number: r.bank_account_number ?? '',
             bank_ifsc_code: r.bank_ifsc_code ?? '',
             bank_name: r.bank_name ?? '',
+            whatsapp_number: r.whatsapp_number ?? '',
         });
     };
 
@@ -788,6 +856,7 @@ export default function ReconciliationRestaurantTab({ dateRange }: { dateRange: 
         if (!paymentDetailsForm) return;
         setSavingPaymentDetails(true);
         try {
+            const whatsappDigits = normalizeWhatsAppNumber(paymentDetailsForm.whatsapp_number);
             const payload = paymentDetailsForm.payment_mode === 'upi'
                 ? {
                     payment_mode: 'upi',
@@ -796,6 +865,7 @@ export default function ReconciliationRestaurantTab({ dateRange }: { dateRange: 
                     bank_account_number: null,
                     bank_ifsc_code: null,
                     bank_name: null,
+                    whatsapp_number: whatsappDigits || null,
                 }
                 : {
                     payment_mode: 'bank_transfer',
@@ -804,6 +874,7 @@ export default function ReconciliationRestaurantTab({ dateRange }: { dateRange: 
                     bank_account_number: paymentDetailsForm.bank_account_number.trim(),
                     bank_ifsc_code: paymentDetailsForm.bank_ifsc_code.trim().toUpperCase(),
                     bank_name: paymentDetailsForm.bank_name.trim(),
+                    whatsapp_number: whatsappDigits || null,
                 };
 
             const { error } = await supabase
