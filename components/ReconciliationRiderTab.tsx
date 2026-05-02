@@ -32,13 +32,16 @@ interface RiderStat {
     id: string;
     full_name: string;
     email: string;
-    openingBalance: number;
-    earnedInPeriod: number;
+    cashCollectedInPeriod: number;
     paidInPeriod: number;
-    closingBalance: number;
     history: any[];
     periodDeliveries: DeliveryBreakdown[];
 }
+
+// As of 2026-05-01, rider payments are settled manually outside the system.
+// Everything before this cutoff is treated as zero — opening balance = 0 for everyone.
+// Earnings are NOT auto-calculated; only manual payouts and cash-collected are tracked.
+const RIDER_MANUAL_PAY_CUTOFF = new Date('2026-05-01T00:00:00.000Z').getTime();
 
 interface PayoutForm {
     riderId: string;
@@ -134,27 +137,18 @@ function RiderBreakdownModal({ rider, dateRange, onClose }: {
         dayMap[day].push(d);
     });
 
-    const days: DayBreakdown[] = Object.entries(dayMap)
+    const days = Object.entries(dayMap)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([date, deliveries]) => {
-            const dailyFixed = getDailyFixed(date);
-            const perDeliveryTotal = deliveries.reduce((s, d) => s + d.riderEarning, 0);
-            const bonus = getDayBonus(deliveries.length, date);
-            return { date, count: deliveries.length, deliveries, dailyFixed, perDeliveryTotal, bonus, dayTotal: dailyFixed + perDeliveryTotal + bonus };
+            const cashCollected = deliveries.reduce((s, d) => s + (d.deliveryType === ('Cash' as any) ? d.riderEarning : 0), 0);
+            const cashCount = deliveries.filter(d => d.deliveryType === ('Cash' as any)).length;
+            return { date, count: deliveries.length, cashCount, cashCollected, deliveries };
         });
 
     const totalDays = days.length;
     const totalDeliveries = rider.periodDeliveries.length;
-    const totalFixed = days.reduce((s, d) => s + d.dailyFixed, 0);
-    const totalPerDelivery = days.reduce((s, d) => s + d.perDeliveryTotal, 0);
-    const totalBonus = days.reduce((s, d) => s + d.bonus, 0);
-    const grandTotal = totalFixed + totalPerDelivery + totalBonus;
-
-    const typeColors: Record<string, string> = {
-        Short:  'bg-blue-50 text-blue-700',
-        Medium: 'bg-amber-50 text-amber-700',
-        Long:   'bg-purple-50 text-purple-700',
-    };
+    const totalCashCount = days.reduce((s, d) => s + d.cashCount, 0);
+    const totalCashCollected = rider.cashCollectedInPeriod;
 
     return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
@@ -165,7 +159,7 @@ function RiderBreakdownModal({ rider, dateRange, onClose }: {
                     <div>
                         <h2 className="text-lg font-bold text-slate-900">{rider.full_name}</h2>
                         <p className="text-sm text-slate-500 mt-0.5">
-                            Earnings breakdown · {formatDate(dateRange.start)} – {formatDate(dateRange.end)}
+                            Cash collection breakdown · {formatDate(dateRange.start)} – {formatDate(dateRange.end)}
                         </p>
                     </div>
                     <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-lg text-slate-500 transition-colors">
@@ -174,22 +168,23 @@ function RiderBreakdownModal({ rider, dateRange, onClose }: {
                 </div>
 
                 {/* Summary strip */}
-                <div className="px-6 py-4 border-b border-slate-100 grid grid-cols-3 sm:grid-cols-6 gap-4 bg-white shrink-0">
-                    {[
-                        { label: 'Days Active',    value: totalDays,                        fmt: (v: number) => String(v) },
-                        { label: 'Deliveries',     value: totalDeliveries,                  fmt: (v: number) => String(v) },
-                        { label: 'Daily Fixed',    value: totalFixed,                       fmt: (v: number) => `₹${v.toFixed(2)}` },
-                        { label: 'Per Delivery',   value: totalPerDelivery,                 fmt: (v: number) => `₹${v.toFixed(2)}` },
-                        { label: 'Bonus',          value: totalBonus,                       fmt: (v: number) => `₹${v.toFixed(2)}` },
-                        { label: 'Total Earned',   value: grandTotal,                       fmt: (v: number) => `₹${v.toFixed(2)}` },
-                    ].map(({ label, value, fmt }) => (
-                        <div key={label}>
-                            <p className="text-xs text-slate-400 uppercase font-semibold">{label}</p>
-                            <p className={`text-lg font-bold mt-0.5 ${label === 'Total Earned' ? 'text-emerald-600' : label === 'Bonus' ? 'text-orange-500' : 'text-slate-800'}`}>
-                                {fmt(value)}
-                            </p>
-                        </div>
-                    ))}
+                <div className="px-6 py-4 border-b border-slate-100 grid grid-cols-2 sm:grid-cols-4 gap-4 bg-white shrink-0">
+                    <div>
+                        <p className="text-xs text-slate-400 uppercase font-semibold">Active Days</p>
+                        <p className="text-lg font-bold text-slate-800 mt-0.5">{totalDays}</p>
+                    </div>
+                    <div>
+                        <p className="text-xs text-slate-400 uppercase font-semibold">Total Deliveries</p>
+                        <p className="text-lg font-bold text-slate-800 mt-0.5">{totalDeliveries}</p>
+                    </div>
+                    <div>
+                        <p className="text-xs text-slate-400 uppercase font-semibold">Cash Orders</p>
+                        <p className="text-lg font-bold text-slate-800 mt-0.5">{totalCashCount}</p>
+                    </div>
+                    <div>
+                        <p className="text-xs text-slate-400 uppercase font-semibold">Cash Collected</p>
+                        <p className="text-lg font-bold text-emerald-600 mt-0.5">₹{totalCashCollected.toFixed(2)}</p>
+                    </div>
                 </div>
 
                 {/* Day-by-day breakdown */}
@@ -207,16 +202,9 @@ function RiderBreakdownModal({ rider, dateRange, onClose }: {
                                     <span className="font-bold text-slate-800 text-sm">
                                         {new Date(day.date + 'T12:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
                                     </span>
-                                    <span className="text-xs text-slate-400">{day.count} deliveries</span>
+                                    <span className="text-xs text-slate-400">{day.count} deliveries · {day.cashCount} cash</span>
                                 </div>
-                                <div className="flex items-center gap-4 text-xs font-semibold">
-                                    <span className="text-slate-500">Fixed: <span className="text-slate-800">₹{day.dailyFixed}</span></span>
-                                    <span className="text-slate-500">Per-delivery: <span className="text-slate-800">₹{day.perDeliveryTotal.toFixed(2)}</span></span>
-                                    {day.bonus > 0 && (
-                                        <span className="text-slate-500">Bonus: <span className="text-orange-600">+₹{day.bonus}</span></span>
-                                    )}
-                                    <span className="text-emerald-600 font-bold">Day Total: ₹{day.dayTotal.toFixed(2)}</span>
-                                </div>
+                                <span className="text-emerald-600 font-bold text-sm">Cash Collected: ₹{day.cashCollected.toFixed(2)}</span>
                             </div>
 
                             {/* Order table */}
@@ -225,49 +213,44 @@ function RiderBreakdownModal({ rider, dateRange, onClose }: {
                                     <tr>
                                         <th className="px-4 py-2.5 text-xs font-bold text-slate-400 uppercase text-left">Time</th>
                                         <th className="px-4 py-2.5 text-xs font-bold text-slate-400 uppercase text-left">Order No.</th>
-                                        <th className="px-4 py-2.5 text-xs font-bold text-slate-400 uppercase text-left">Type</th>
-                                        <th className="px-4 py-2.5 text-xs font-bold text-slate-400 uppercase text-right">Delivery Fee</th>
-                                        <th className="px-4 py-2.5 text-xs font-bold text-slate-400 uppercase text-right">Rider Earning</th>
+                                        <th className="px-4 py-2.5 text-xs font-bold text-slate-400 uppercase text-left">Payment</th>
+                                        <th className="px-4 py-2.5 text-xs font-bold text-slate-400 uppercase text-right">Cash Collected</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-50">
-                                    {day.deliveries.map((d, idx) => (
-                                        <tr key={d.order_id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}>
-                                            <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">
-                                                {new Date(d.updated_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
-                                            </td>
-                                            <td className="px-4 py-3 font-mono font-semibold text-slate-800">#{d.order_number}</td>
-                                            <td className="px-4 py-3">
-                                                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${typeColors[d.deliveryType]}`}>
-                                                    {d.deliveryType}
-                                                </span>
-                                            </td>
-                                            <td className="px-4 py-3 text-right text-slate-500">₹{d.delivery_fee.toFixed(2)}</td>
-                                            <td className="px-4 py-3 text-right font-bold text-emerald-600">₹{d.riderEarning.toFixed(2)}</td>
-                                        </tr>
-                                    ))}
+                                    {day.deliveries.map((d, idx) => {
+                                        const isCash = (d.deliveryType as any) === 'Cash';
+                                        return (
+                                            <tr key={d.order_id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}>
+                                                <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">
+                                                    {new Date(d.updated_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
+                                                </td>
+                                                <td className="px-4 py-3 font-mono font-semibold text-slate-800">#{d.order_number}</td>
+                                                <td className="px-4 py-3">
+                                                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                                                        isCash ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                                                    }`}>
+                                                        {isCash ? 'Cash' : 'Online'}
+                                                    </span>
+                                                </td>
+                                                <td className={`px-4 py-3 text-right font-bold ${isCash ? 'text-emerald-600' : 'text-slate-300'}`}>
+                                                    {isCash ? `₹${d.riderEarning.toFixed(2)}` : '—'}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
                                 </tbody>
-                                {day.bonus > 0 && (
-                                    <tfoot>
-                                        <tr className="bg-orange-50 border-t border-orange-100">
-                                            <td colSpan={4} className="px-4 py-2 text-xs font-semibold text-orange-700">
-                                                🎯 Performance Bonus ({day.count >= 20 ? '20+' : '15+'} deliveries)
-                                            </td>
-                                            <td className="px-4 py-2 text-right font-bold text-orange-600">+₹{day.bonus}</td>
-                                        </tr>
-                                    </tfoot>
-                                )}
                             </table>
                         </div>
                     ))}
                 </div>
 
                 {/* Grand total footer */}
-                <div className="px-6 py-4 border-t border-slate-100 bg-orange-50/60 shrink-0 flex items-center justify-between">
+                <div className="px-6 py-4 border-t border-slate-100 bg-emerald-50/60 shrink-0 flex items-center justify-between">
                     <div className="text-sm text-slate-500">
-                        {totalDays} day{totalDays !== 1 ? 's' : ''} · {totalDeliveries} deliveries · ₹{totalFixed} fixed + ₹{totalPerDelivery.toFixed(2)} per-delivery + ₹{totalBonus} bonus
+                        {totalDays} day{totalDays !== 1 ? 's' : ''} · {totalDeliveries} deliveries · {totalCashCount} cash
                     </div>
-                    <div className="text-xl font-bold text-emerald-600">Total: ₹{grandTotal.toFixed(2)}</div>
+                    <div className="text-xl font-bold text-emerald-600">Total Cash: ₹{totalCashCollected.toFixed(2)}</div>
                 </div>
             </div>
         </div>
@@ -301,7 +284,7 @@ export default function ReconciliationRiderTab({ dateRange }: { dateRange: DateR
 
             const { data: deliveries, error: delErr } = await supabase
                 .from('deliveries')
-                .select('rider_id, delivery_fee, updated_at, order_id, orders(order_number)')
+                .select('rider_id, delivery_fee, updated_at, order_id, orders(order_number, payment_method, total)')
                 .eq('status', 'completed');
             if (delErr) throw delErr;
 
@@ -312,40 +295,39 @@ export default function ReconciliationRiderTab({ dateRange }: { dateRange: DateR
 
             const startUTC = new Date(`${dateRange.start}T00:00:00.000Z`).getTime();
             const endUTC   = new Date(`${dateRange.end}T23:59:59.999Z`).getTime();
-            const LEGACY_CUTOFF = new Date('2026-04-09T00:00:00.000Z').getTime();
 
             const stats = profiles.map(rider => {
-                let lifetimeEarnedBefore = 0;
-                let lifetimePaidBefore   = 0;
-                let earnedInPeriod       = 0;
-                let paidInPeriod         = 0;
+                let cashCollectedInPeriod = 0;
+                let paidInPeriod          = 0;
                 const riderHistory: any[] = [];
 
+                // Only deliveries on/after the manual-pay cutoff matter — pre-cutoff is settled.
                 const riderDeliveries = (deliveries || []).filter(d => {
                     if (d.rider_id !== rider.id) return false;
                     const t = new Date(d.updated_at).getTime();
-                    return t >= LEGACY_CUTOFF;
+                    return t >= RIDER_MANUAL_PAY_CUTOFF;
                 });
-                lifetimeEarnedBefore = calcEarnings(
-                    riderDeliveries.filter(d => new Date(d.updated_at).getTime() < startUTC)
-                );
+
                 const periodRaw = riderDeliveries.filter(d => {
                     const t = new Date(d.updated_at).getTime();
                     return t >= startUTC && t <= endUTC;
                 });
-                earnedInPeriod = calcEarnings(periodRaw);
 
                 const periodDeliveries: DeliveryBreakdown[] = periodRaw
                     .map(d => {
-                        const istDate = getISTDate(d.updated_at);
+                        const order = (d.orders as any) || {};
                         const fee = Number(d.delivery_fee || 0);
+                        const isCash = order.payment_method === 'cash';
+                        const orderTotal = Number(order.total || 0);
+                        if (isCash) cashCollectedInPeriod += orderTotal;
                         return {
                             order_id: d.order_id,
-                            order_number: (d.orders as any)?.order_number ?? '—',
+                            order_number: order.order_number ?? '—',
                             updated_at: d.updated_at,
                             delivery_fee: fee,
-                            deliveryType: getDeliveryType(fee),
-                            riderEarning: getPerDeliveryEarning(fee, istDate),
+                            // Repurpose existing fields to carry payment-mode + order total for breakdown UI
+                            deliveryType: (isCash ? 'Cash' : 'Online') as any,
+                            riderEarning: isCash ? orderTotal : 0,
                         };
                     })
                     .sort((a, b) => new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime());
@@ -353,25 +335,21 @@ export default function ReconciliationRiderTab({ dateRange }: { dateRange: DateR
                 payouts?.forEach(p => {
                     if (p.rider_id !== rider.id) return;
                     const amt = Number(p.amount || 0);
-                    // Use payout_date (actual payment date) if available, fall back to created_at
                     const t   = new Date(p.payout_date || p.created_at).getTime();
-                    if (t < LEGACY_CUTOFF) return;
+                    if (t < RIDER_MANUAL_PAY_CUTOFF) return;
                     if (t >= startUTC && t <= endUTC) {
                         riderHistory.push(p);
                         paidInPeriod += amt;
-                    } else if (t < startUTC) {
-                        lifetimePaidBefore += amt;
                     }
                 });
 
-                const openingBalance = lifetimeEarnedBefore - lifetimePaidBefore;
-                const closingBalance = openingBalance + earnedInPeriod - paidInPeriod;
                 riderHistory.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-                return { id: rider.id, full_name: rider.full_name, email: rider.email, openingBalance, earnedInPeriod, paidInPeriod, closingBalance, history: riderHistory, periodDeliveries };
+                return { id: rider.id, full_name: rider.full_name, email: rider.email, cashCollectedInPeriod, paidInPeriod, history: riderHistory, periodDeliveries };
             });
 
-            stats.sort((a, b) => b.closingBalance - a.closingBalance);
+            // Sort by cash collected (most-active riders first)
+            stats.sort((a, b) => b.cashCollectedInPeriod - a.cashCollectedInPeriod);
             setRiders(stats);
         } catch (error) {
             console.error('Error fetching rider ledger:', error);
@@ -401,7 +379,7 @@ export default function ReconciliationRiderTab({ dateRange }: { dateRange: DateR
     const openPayoutForm = (rider: RiderStat) => {
         setPayoutForm({
             riderId: rider.id,
-            amount: rider.closingBalance > 0 ? rider.closingBalance.toFixed(2) : '',
+            amount: '',
             note: '',
             date: dateRange.end, // default to end of the selected period
         });
@@ -452,7 +430,8 @@ export default function ReconciliationRiderTab({ dateRange }: { dateRange: DateR
         </div>
     );
 
-    const totalOwedGlobally = filtered.reduce((acc, r) => acc + r.closingBalance, 0);
+    const totalCashCollected = filtered.reduce((acc, r) => acc + r.cashCollectedInPeriod, 0);
+    const totalPaidOut       = filtered.reduce((acc, r) => acc + r.paidInPeriod, 0);
 
     return (
         <div className="space-y-6">
@@ -474,8 +453,13 @@ export default function ReconciliationRiderTab({ dateRange }: { dateRange: DateR
                         onChange={(e) => setSearchQuery(e.target.value)}
                     />
                 </div>
-                <div className="bg-red-50 text-red-700 px-4 py-2 rounded-lg border border-red-100 font-semibold shadow-sm">
-                    Total Platform Debt: ₹{totalOwedGlobally.toLocaleString()}
+                <div className="flex gap-2">
+                    <div className="bg-emerald-50 text-emerald-700 px-4 py-2 rounded-lg border border-emerald-100 font-semibold shadow-sm">
+                        Total Cash Collected: ₹{totalCashCollected.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                    <div className="bg-slate-50 text-slate-700 px-4 py-2 rounded-lg border border-slate-200 font-semibold shadow-sm">
+                        Total Paid Out: ₹{totalPaidOut.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
                 </div>
             </div>
 
@@ -484,10 +468,10 @@ export default function ReconciliationRiderTab({ dateRange }: { dateRange: DateR
                     <thead>
                         <tr className="bg-slate-50 border-b border-slate-100">
                             <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Rider</th>
-                            <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Opening Balance</th>
-                            <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Earned (Period)</th>
+                            <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Deliveries (Period)</th>
+                            <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Cash Collected (Period)</th>
                             <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Paid (Period)</th>
-                            <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase text-right">Closing Balance</th>
+                            <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase text-right">Pending</th>
                             <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase text-right">Action</th>
                         </tr>
                     </thead>
@@ -499,17 +483,12 @@ export default function ReconciliationRiderTab({ dateRange }: { dateRange: DateR
                                         <p className="font-semibold text-slate-900">{r.full_name}</p>
                                         <p className="text-xs text-slate-400">{r.email}</p>
                                     </td>
-                                    <td className="px-6 py-4 text-slate-600">₹{r.openingBalance.toLocaleString()}</td>
-                                    <td className="px-6 py-4 font-semibold text-emerald-600">+₹{r.earnedInPeriod.toLocaleString()}</td>
-                                    <td className="px-6 py-4 font-semibold text-red-500">-₹{r.paidInPeriod.toLocaleString()}</td>
+                                    <td className="px-6 py-4 text-slate-700 font-semibold">{r.periodDeliveries.length}</td>
+                                    <td className="px-6 py-4 font-semibold text-emerald-600">₹{r.cashCollectedInPeriod.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                    <td className="px-6 py-4 font-semibold text-slate-700">₹{r.paidInPeriod.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                                     <td className="px-6 py-4 text-right">
-                                        <div className={`font-bold inline-block px-3 py-1 rounded-full text-xs ${
-                                            r.closingBalance > 0 ? 'bg-orange-100 text-orange-700' :
-                                            r.closingBalance < 0 ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-100 text-slate-600'
-                                        }`}>
-                                            {r.closingBalance < 0
-                                                ? `(Credit) ₹${Math.abs(r.closingBalance).toLocaleString()}`
-                                                : `₹${r.closingBalance.toLocaleString()}`}
+                                        <div className="font-bold inline-block px-3 py-1 rounded-full text-xs bg-slate-100 text-slate-500" title="Pending payments are settled manually outside the system as of 1 May 2026">
+                                            ₹0 · Manual
                                         </div>
                                     </td>
                                     <td className="px-6 py-4 text-right">
