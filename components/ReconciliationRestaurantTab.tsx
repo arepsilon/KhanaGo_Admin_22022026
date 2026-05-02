@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import {
     Search, Loader2, CreditCard, ChevronDown, ChevronUp,
-    History, CheckCircle2, FileText, Download, X, Trash2
+    History, CheckCircle2, FileText, Download, X, Trash2, Wallet
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 
@@ -44,6 +44,174 @@ interface RestaurantStat {
     closingBalance: number;
     history: any[];
     periodOrders: OrderBreakdown[];
+    payment_mode: 'upi' | 'bank_transfer' | null;
+    upi_id: string | null;
+    bank_account_name: string | null;
+    bank_account_number: string | null;
+    bank_ifsc_code: string | null;
+    bank_name: string | null;
+}
+
+type PaymentDetailsForm = {
+    restId: string;
+    restName: string;
+    payment_mode: 'upi' | 'bank_transfer';
+    upi_id: string;
+    bank_account_name: string;
+    bank_account_number: string;
+    bank_ifsc_code: string;
+    bank_name: string;
+};
+
+// ─── Payment Details Modal ───────────────────────────────────────────────────
+
+function PaymentDetailsModal({
+    form,
+    onChange,
+    onClose,
+    onSave,
+    saving,
+}: {
+    form: PaymentDetailsForm;
+    onChange: (f: PaymentDetailsForm) => void;
+    onClose: () => void;
+    onSave: () => void;
+    saving: boolean;
+}) {
+    const isUpi = form.payment_mode === 'upi';
+
+    const isValid = isUpi
+        ? form.upi_id.trim().length > 0
+        : form.bank_account_number.trim().length > 0
+            && form.bank_ifsc_code.trim().length > 0
+            && form.bank_account_name.trim().length > 0
+            && form.bank_name.trim().length > 0;
+
+    return (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden border border-slate-200">
+                <div className="px-6 py-4 border-b border-slate-100 flex items-start justify-between bg-slate-50/50">
+                    <div>
+                        <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                            <Wallet size={18} className="text-orange-500" />
+                            Payment Details
+                        </h2>
+                        <p className="text-sm text-slate-500 mt-0.5">{form.restName}</p>
+                    </div>
+                    <button
+                        onClick={onClose}
+                        className="p-2 hover:bg-slate-200 rounded-lg text-slate-500 transition-colors"
+                    >
+                        <X size={18} />
+                    </button>
+                </div>
+
+                <div className="px-6 py-5 space-y-5">
+                    <div>
+                        <label className="block text-xs font-semibold text-slate-500 uppercase mb-2">Payment Mode *</label>
+                        <div className="grid grid-cols-2 gap-2">
+                            <button
+                                type="button"
+                                onClick={() => onChange({ ...form, payment_mode: 'upi' })}
+                                className={`px-4 py-3 rounded-lg text-sm font-bold border-2 transition-all ${
+                                    isUpi
+                                        ? 'bg-orange-50 border-orange-400 text-orange-700'
+                                        : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
+                                }`}
+                            >
+                                UPI
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => onChange({ ...form, payment_mode: 'bank_transfer' })}
+                                className={`px-4 py-3 rounded-lg text-sm font-bold border-2 transition-all ${
+                                    !isUpi
+                                        ? 'bg-orange-50 border-orange-400 text-orange-700'
+                                        : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
+                                }`}
+                            >
+                                Account Transfer
+                            </button>
+                        </div>
+                    </div>
+
+                    {isUpi ? (
+                        <div>
+                            <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">UPI ID *</label>
+                            <input
+                                type="text"
+                                placeholder="e.g. owner@upi"
+                                value={form.upi_id}
+                                onChange={e => onChange({ ...form, upi_id: e.target.value })}
+                                className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:ring-2 focus:ring-orange-400 focus:border-orange-400 outline-none"
+                                autoFocus
+                            />
+                        </div>
+                    ) : (
+                        <div className="space-y-3">
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Account Holder Name *</label>
+                                <input
+                                    type="text"
+                                    value={form.bank_account_name}
+                                    onChange={e => onChange({ ...form, bank_account_name: e.target.value })}
+                                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:ring-2 focus:ring-orange-400 focus:border-orange-400 outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Bank Name *</label>
+                                <input
+                                    type="text"
+                                    placeholder="e.g. HDFC Bank"
+                                    value={form.bank_name}
+                                    onChange={e => onChange({ ...form, bank_name: e.target.value })}
+                                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:ring-2 focus:ring-orange-400 focus:border-orange-400 outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Account Number *</label>
+                                <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    value={form.bank_account_number}
+                                    onChange={e => onChange({ ...form, bank_account_number: e.target.value })}
+                                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm font-mono focus:ring-2 focus:ring-orange-400 focus:border-orange-400 outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">IFSC Code *</label>
+                                <input
+                                    type="text"
+                                    placeholder="e.g. HDFC0001234"
+                                    value={form.bank_ifsc_code}
+                                    onChange={e => onChange({ ...form, bank_ifsc_code: e.target.value.toUpperCase() })}
+                                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm font-mono uppercase focus:ring-2 focus:ring-orange-400 focus:border-orange-400 outline-none"
+                                />
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                <div className="px-6 py-4 border-t border-slate-100 bg-slate-50/50 flex items-center justify-end gap-2">
+                    <button
+                        onClick={onClose}
+                        className="px-4 py-2 rounded-lg text-sm font-bold text-slate-600 hover:bg-slate-200 transition-colors"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={onSave}
+                        disabled={!isValid || saving}
+                        className="px-5 py-2 rounded-lg text-sm font-bold bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all"
+                    >
+                        {saving
+                            ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
+                            : <><CheckCircle2 size={15} /> Save Details</>}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
 }
 
 // ─── Breakdown Modal ──────────────────────────────────────────────────────────
@@ -433,6 +601,8 @@ export default function ReconciliationRestaurantTab({ dateRange }: { dateRange: 
     const [breakdownRestaurant, setBreakdownRestaurant] = useState<RestaurantStat | null>(null);
     const [payoutForm, setPayoutForm] = useState<PayoutForm | null>(null);
     const [deletingPayoutId, setDeletingPayoutId] = useState<string | null>(null);
+    const [paymentDetailsForm, setPaymentDetailsForm] = useState<PaymentDetailsForm | null>(null);
+    const [savingPaymentDetails, setSavingPaymentDetails] = useState(false);
 
     const supabase = createClient();
 
@@ -445,7 +615,7 @@ export default function ReconciliationRestaurantTab({ dateRange }: { dateRange: 
         try {
             const { data: restsData, error: restErr } = await supabase
                 .from('restaurants')
-                .select('id, name, platform_fee_per_order, transaction_charge_percent');
+                .select('id, name, platform_fee_per_order, transaction_charge_percent, payment_mode, upi_id, bank_account_name, bank_account_number, bank_ifsc_code, bank_name');
             if (restErr) throw restErr;
 
             const { data: orders, error: ordErr } = await supabase
@@ -565,6 +735,12 @@ export default function ReconciliationRestaurantTab({ dateRange }: { dateRange: 
                     closingBalance,
                     history: restHistory,
                     periodOrders,
+                    payment_mode: (restaurant as any).payment_mode ?? null,
+                    upi_id: (restaurant as any).upi_id ?? null,
+                    bank_account_name: (restaurant as any).bank_account_name ?? null,
+                    bank_account_number: (restaurant as any).bank_account_number ?? null,
+                    bank_ifsc_code: (restaurant as any).bank_ifsc_code ?? null,
+                    bank_name: (restaurant as any).bank_name ?? null,
                 };
             });
 
@@ -592,6 +768,57 @@ export default function ReconciliationRestaurantTab({ dateRange }: { dateRange: 
             alert('Error reversing payout: ' + err.message);
         } finally {
             setDeletingPayoutId(null);
+        }
+    };
+
+    const openPaymentDetailsForm = (r: RestaurantStat) => {
+        setPaymentDetailsForm({
+            restId: r.id,
+            restName: r.name,
+            payment_mode: r.payment_mode ?? 'upi',
+            upi_id: r.upi_id ?? '',
+            bank_account_name: r.bank_account_name ?? '',
+            bank_account_number: r.bank_account_number ?? '',
+            bank_ifsc_code: r.bank_ifsc_code ?? '',
+            bank_name: r.bank_name ?? '',
+        });
+    };
+
+    const handleSavePaymentDetails = async () => {
+        if (!paymentDetailsForm) return;
+        setSavingPaymentDetails(true);
+        try {
+            const payload = paymentDetailsForm.payment_mode === 'upi'
+                ? {
+                    payment_mode: 'upi',
+                    upi_id: paymentDetailsForm.upi_id.trim(),
+                    bank_account_name: null,
+                    bank_account_number: null,
+                    bank_ifsc_code: null,
+                    bank_name: null,
+                }
+                : {
+                    payment_mode: 'bank_transfer',
+                    upi_id: null,
+                    bank_account_name: paymentDetailsForm.bank_account_name.trim(),
+                    bank_account_number: paymentDetailsForm.bank_account_number.trim(),
+                    bank_ifsc_code: paymentDetailsForm.bank_ifsc_code.trim().toUpperCase(),
+                    bank_name: paymentDetailsForm.bank_name.trim(),
+                };
+
+            const { error } = await supabase
+                .from('restaurants')
+                .update(payload)
+                .eq('id', paymentDetailsForm.restId);
+            if (error) throw error;
+
+            setPaymentDetailsForm(null);
+            await fetchRestaurantLedger();
+        } catch (err: any) {
+            console.error(err);
+            alert('Error saving payment details: ' + err.message);
+        } finally {
+            setSavingPaymentDetails(false);
         }
     };
 
@@ -658,6 +885,16 @@ export default function ReconciliationRestaurantTab({ dateRange }: { dateRange: 
                 />
             )}
 
+            {paymentDetailsForm && (
+                <PaymentDetailsModal
+                    form={paymentDetailsForm}
+                    onChange={setPaymentDetailsForm}
+                    onClose={() => setPaymentDetailsForm(null)}
+                    onSave={handleSavePaymentDetails}
+                    saving={savingPaymentDetails}
+                />
+            )}
+
             <div className="space-y-6">
                 <div className="flex items-center justify-between">
                     <div className="relative w-full max-w-sm">
@@ -714,6 +951,18 @@ export default function ReconciliationRestaurantTab({ dateRange }: { dateRange: 
                                                 >
                                                     <FileText size={14} />
                                                     Breakdown
+                                                </button>
+                                                <button
+                                                    onClick={() => openPaymentDetailsForm(r)}
+                                                    title={r.payment_mode ? `Payment via ${r.payment_mode === 'upi' ? 'UPI' : 'Bank Transfer'}` : 'No payment details set'}
+                                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 border ${
+                                                        r.payment_mode
+                                                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                                                            : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                                                    }`}
+                                                >
+                                                    <Wallet size={14} />
+                                                    {r.payment_mode ? 'Payment Details' : 'Add Payment Details'}
                                                 </button>
                                                 <button
                                                     onClick={() => payoutForm?.restId === r.id ? setPayoutForm(null) : openPayoutForm(r)}
