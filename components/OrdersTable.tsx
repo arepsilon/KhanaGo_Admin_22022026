@@ -559,7 +559,14 @@ export default function OrdersTable() {
                                         </td>
                                         <td className="py-2.5 px-3">
                                             {rider ? (
-                                                <div className="text-xs font-medium text-cyan-700 truncate max-w-[90px]">{rider.full_name}</div>
+                                                <div>
+                                                    <div className="text-xs font-medium text-cyan-700 truncate max-w-[90px]">{rider.full_name}</div>
+                                                    {delivery?.rider_arrived_at_restaurant && !delivery?.pickup_time && (
+                                                        <span className="inline-block mt-0.5 px-1.5 py-0.5 text-[9px] font-semibold rounded-full bg-green-100 text-green-700 border border-green-200 whitespace-nowrap">
+                                                            📍 At Restaurant · {new Date(delivery.rider_arrived_at_restaurant).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             ) : (
                                                 <span className="text-xs text-gray-400">—</span>
                                             )}
