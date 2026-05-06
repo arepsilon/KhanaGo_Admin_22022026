@@ -41,6 +41,13 @@ export default function SettingsManager() {
     const [razorpayKeyId, setRazorpayKeyId] = useState('');
     const [razorpayKeySecret, setRazorpayKeySecret] = useState('');
 
+    // PhonePe State
+    const [phonepeEnabled, setPhonepeEnabled] = useState(false);
+    const [phonepeMerchantId, setPhonepeMerchantId] = useState('');
+    const [phonepeSaltKey, setPhonepeSaltKey] = useState('');
+    const [phonepeSaltIndex, setPhonepeSaltIndex] = useState('1');
+    const [phonepeEnvironment, setPhonepeEnvironment] = useState<'UAT' | 'PRODUCTION'>('UAT');
+
     const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
     useEffect(() => {
@@ -129,6 +136,18 @@ export default function SettingsManager() {
                 if (rpKeyId !== undefined) setRazorpayKeyId(String(rpKeyId).replace(/"/g, ''));
                 if (rpSecret !== undefined) setRazorpayKeySecret(String(rpSecret).replace(/"/g, ''));
 
+                const ppEnabled = data.find(s => s.key === 'phonepe_enabled')?.value;
+                const ppMerchantId = data.find(s => s.key === 'phonepe_merchant_id')?.value;
+                const ppSaltKey = data.find(s => s.key === 'phonepe_salt_key')?.value;
+                const ppSaltIndex = data.find(s => s.key === 'phonepe_salt_index')?.value;
+                const ppEnvironment = data.find(s => s.key === 'phonepe_environment')?.value;
+
+                if (ppEnabled !== undefined) setPhonepeEnabled(Boolean(ppEnabled));
+                if (ppMerchantId !== undefined) setPhonepeMerchantId(String(ppMerchantId).replace(/"/g, ''));
+                if (ppSaltKey !== undefined) setPhonepeSaltKey(String(ppSaltKey).replace(/"/g, ''));
+                if (ppSaltIndex !== undefined) setPhonepeSaltIndex(String(ppSaltIndex).replace(/"/g, ''));
+                if (ppEnvironment !== undefined) setPhonepeEnvironment(String(ppEnvironment).replace(/"/g, '') as 'UAT' | 'PRODUCTION');
+
                 if (sActive !== undefined) setIsSurgeActive(Boolean(sActive));
                 if (sFee !== undefined) setSurgeFee(String(sFee));
                 if (sReason !== undefined) setSurgeReason(String(sReason).replace(/"/g, ''));
@@ -173,10 +192,17 @@ export default function SettingsManager() {
                 { key: 'grocery_minimum_order', value: parseFloat(groceryMinimumOrder) || 0, description: 'Minimum order amount for grocery', city_id: selectedCityId },
                 { key: 'grocery_free_delivery_above', value: parseFloat(groceryFreeDeliveryAbove) || 0, description: 'Free delivery threshold for grocery', city_id: selectedCityId },
 
-                // Razorpay updates
+                // Razorpay
                 { key: 'razorpay_enabled', value: razorpayEnabled, description: 'Enable Razorpay payment gateway', city_id: selectedCityId },
                 { key: 'razorpay_key_id', value: JSON.stringify(razorpayKeyId), description: 'Razorpay Key ID', city_id: selectedCityId },
                 { key: 'razorpay_key_secret', value: JSON.stringify(razorpayKeySecret), description: 'Razorpay Key Secret', city_id: selectedCityId },
+
+                // PhonePe
+                { key: 'phonepe_enabled', value: phonepeEnabled, description: 'Enable PhonePe payment gateway', city_id: selectedCityId },
+                { key: 'phonepe_merchant_id', value: JSON.stringify(phonepeMerchantId), description: 'PhonePe Merchant ID', city_id: selectedCityId },
+                { key: 'phonepe_salt_key', value: JSON.stringify(phonepeSaltKey), description: 'PhonePe Salt Key', city_id: selectedCityId },
+                { key: 'phonepe_salt_index', value: JSON.stringify(phonepeSaltIndex), description: 'PhonePe Salt Index', city_id: selectedCityId },
+                { key: 'phonepe_environment', value: JSON.stringify(phonepeEnvironment), description: 'PhonePe Environment (UAT or PRODUCTION)', city_id: selectedCityId },
 
                 // Menu Image update
                 { key: 'show_menu_images', value: showMenuImages, description: 'Toggle visibility of menu item images in the customer app', city_id: selectedCityId },
@@ -519,6 +545,71 @@ export default function SettingsManager() {
                                     className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all font-medium"
                                     placeholder="Enter key secret"
                                 />
+                            </div>
+                        </div>
+                    )}
+
+                    {/* PhonePe Settings */}
+                    <div className="flex items-center justify-between p-4 rounded-xl border border-slate-100 bg-slate-50 mb-4 mt-4">
+                        <div>
+                            <h3 className="font-semibold text-slate-900">Enable PhonePe</h3>
+                            <p className="text-sm text-slate-500">Allow customers to pay online via PhonePe</p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={phonepeEnabled}
+                                onChange={(e) => setPhonepeEnabled(e.target.checked)}
+                                className="sr-only peer"
+                            />
+                            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500"></div>
+                        </label>
+                    </div>
+
+                    {phonepeEnabled && (
+                        <div className="space-y-4">
+                            <div className="space-y-2">
+                                <label className="block text-sm font-semibold text-slate-900">Merchant ID</label>
+                                <input
+                                    type="text"
+                                    value={phonepeMerchantId}
+                                    onChange={(e) => setPhonepeMerchantId(e.target.value)}
+                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium"
+                                    placeholder="e.g. KHANAGOONLINE"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="block text-sm font-semibold text-slate-900">Salt Key</label>
+                                <input
+                                    type="password"
+                                    value={phonepeSaltKey}
+                                    onChange={(e) => setPhonepeSaltKey(e.target.value)}
+                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium"
+                                    placeholder="Enter salt key"
+                                />
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <label className="block text-sm font-semibold text-slate-900">Salt Index</label>
+                                    <input
+                                        type="text"
+                                        value={phonepeSaltIndex}
+                                        onChange={(e) => setPhonepeSaltIndex(e.target.value)}
+                                        className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium"
+                                        placeholder="1"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="block text-sm font-semibold text-slate-900">Environment</label>
+                                    <select
+                                        value={phonepeEnvironment}
+                                        onChange={(e) => setPhonepeEnvironment(e.target.value as 'UAT' | 'PRODUCTION')}
+                                        className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium bg-white"
+                                    >
+                                        <option value="UAT">UAT (Testing)</option>
+                                        <option value="PRODUCTION">Production</option>
+                                    </select>
+                                </div>
                             </div>
                         </div>
                     )}
