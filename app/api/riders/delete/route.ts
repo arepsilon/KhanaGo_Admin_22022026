@@ -20,15 +20,17 @@ export async function POST(request: NextRequest) {
         // 2. Cleanup Order Assignments (or could be 'cancelled' but delete is cleaner for forced removal)
         await supabase.from('order_assignments').delete().eq('rider_id', userId);
 
-        // 3. Unassign current deliveries (preserve the order history, just remove rider)
-        // If the order is ongoing, this might leave it in limbo, but deleting a rider during active delivery is edge case.
-        // Better to set rider_id to null so it doesn't break FK.
+        // 3. Unassign current deliveries — deliveries.rider_id has ON DELETE SET NULL so this
+        //    is redundant but explicit for active deliveries mid-flow.
         await supabase.from('deliveries').update({ rider_id: null }).eq('rider_id', userId);
-        
-        // 4. Delete profile (explicitly, though cascade might handle it)
+
+        // 4. Null out ratings.rider_id — this FK has no CASCADE so it blocks profile deletion.
+        await supabase.from('ratings').update({ rider_id: null }).eq('rider_id', userId);
+
+        // 5. Delete profile (explicitly, though cascade from auth.users would also handle it)
         await supabase.from('profiles').delete().eq('id', userId);
 
-        // 5. Delete user from Auth
+        // 6. Delete user from Auth
         const { error } = await supabase.auth.admin.deleteUser(userId);
 
         if (error) {
