@@ -42,6 +42,24 @@ function LocationMismatchBadge({ order }: { order: any }) {
     );
 }
 
+function getTimingStatus(order: any, delivery: any): { status: 'on_time' | 'delayed'; delayMins: number } | null {
+    if (['cancelled', 'rejected', 'wastage', 'pending'].includes(order.status)) return null;
+    if (!order.accepted_at) return null;
+
+    const prepMins = order.promised_prep_minutes || order.restaurant?.preparation_time || 30;
+    const expectedDeliveryMs = new Date(order.accepted_at).getTime() + (prepMins + 20) * 60000;
+
+    if (order.delivered_at) {
+        const totalMins = Math.round((new Date(order.delivered_at).getTime() - new Date(order.created_at).getTime()) / 60000);
+        const targetMins = prepMins + 20;
+        const delayMins = totalMins - targetMins;
+        return { status: delayMins > 5 ? 'delayed' : 'on_time', delayMins };
+    }
+
+    const delayMins = Math.round((Date.now() - expectedDeliveryMs) / 60000);
+    return { status: delayMins > 0 ? 'delayed' : 'on_time', delayMins };
+}
+
 export default function OrdersTable() {
     const [orders, setOrders] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -485,6 +503,7 @@ export default function OrdersTable() {
                             <th className="text-center py-3 px-2 font-semibold text-gray-600 text-xs uppercase tracking-wider">Items</th>
                             <th className="text-right py-3 px-3 font-semibold text-gray-600 text-xs uppercase tracking-wider">Total</th>
                             <th className="text-center py-3 px-3 font-semibold text-gray-600 text-xs uppercase tracking-wider">Status</th>
+                            <th className="text-center py-3 px-2 font-semibold text-gray-600 text-xs uppercase tracking-wider">Timing</th>
                             <th className="text-left py-3 px-3 font-semibold text-gray-600 text-xs uppercase tracking-wider">Rider</th>
                             <th className="text-center py-3 px-2 font-semibold text-gray-600 text-xs uppercase tracking-wider">Route</th>
                             <th className="text-center py-3 px-2 font-semibold text-gray-600 text-xs uppercase tracking-wider">Prep</th>
@@ -556,6 +575,24 @@ export default function OrdersTable() {
                                                     </span>
                                                 </div>
                                             )}
+                                        </td>
+                                        <td className="py-2.5 px-2 text-center">
+                                            {(() => {
+                                                const timing = getTimingStatus(order, delivery);
+                                                if (!timing) return <span className="text-[10px] text-gray-300">—</span>;
+                                                if (timing.status === 'on_time') {
+                                                    return (
+                                                        <span className="inline-block px-2 py-0.5 text-[10px] font-bold rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+                                                            ✓ On Time
+                                                        </span>
+                                                    );
+                                                }
+                                                return (
+                                                    <span className="inline-block px-2 py-0.5 text-[10px] font-bold rounded-full bg-red-100 text-red-700 border border-red-200 whitespace-nowrap">
+                                                        ⚠ +{timing.delayMins}m Late
+                                                    </span>
+                                                );
+                                            })()}
                                         </td>
                                         <td className="py-2.5 px-3">
                                             {rider ? (
@@ -673,7 +710,7 @@ export default function OrdersTable() {
                                     {
                                         isExpanded && (
                                             <tr>
-                                                <td colSpan={12} className="p-0 border-b-4 border-orange-200">
+                                                <td colSpan={13} className="p-0 border-b-4 border-orange-200">
                                                     <div className="border-t border-orange-200 px-4 py-3 bg-orange-50/50">
                                                         {/* Top: Badges */}
                                                         <div className="flex flex-wrap gap-1.5 mb-3">
