@@ -6,22 +6,31 @@ import { createClient } from '@/lib/supabase/client';
 export default function UsersTable() {
     const [users, setUsers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searching, setSearching] = useState(false);
     const supabase = createClient();
 
     useEffect(() => {
         fetchUsers();
     }, []);
 
-    const fetchUsers = async () => {
-        const { data, error } = await supabase
+    const fetchUsers = async (query?: string) => {
+        if (query) setSearching(true);
+        else setLoading(true);
+
+        let q = supabase
             .from('profiles')
-            .select(`
-                *,
-                orders(count)
-            `)
+            .select(`*, orders(count)`)
             .eq('role', 'customer')
-            .order('created_at', { ascending: false })
-            .limit(100);
+            .order('created_at', { ascending: false });
+
+        if (query) {
+            q = q.or(`full_name.ilike.%${query}%,phone.ilike.%${query}%`);
+        } else {
+            q = q.limit(100);
+        }
+
+        const { data, error } = await q;
 
         if (error) {
             console.error('Error fetching users:', error);
@@ -29,6 +38,17 @@ export default function UsersTable() {
             setUsers(data || []);
         }
         setLoading(false);
+        setSearching(false);
+    };
+
+    const handleSearch = (e: React.FormEvent) => {
+        e.preventDefault();
+        fetchUsers(searchQuery.trim() || undefined);
+    };
+
+    const handleClearSearch = () => {
+        setSearchQuery('');
+        fetchUsers();
     };
 
     const handleToggleTesterStatus = async (id: string, currentStatus: boolean) => {
@@ -78,12 +98,38 @@ export default function UsersTable() {
     return (
         <div className="bg-white rounded-xl shadow-sm">
             <div className="p-6 border-b border-gray-200">
-                <div className="flex justify-between items-center">
+                <div className="flex justify-between items-center mb-4">
                     <h2 className="text-xl font-bold text-gray-900">Customer Users</h2>
                     <div className="text-sm text-gray-600">
-                        Total: <span className="font-bold text-gray-900">{users.length}</span> users
+                        {searchQuery ? 'Search results: ' : 'Showing latest '}
+                        <span className="font-bold text-gray-900">{users.length}</span> users
                     </div>
                 </div>
+                <form onSubmit={handleSearch} className="flex gap-2">
+                    <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="Search by name or phone..."
+                        className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                    <button
+                        type="submit"
+                        disabled={searching}
+                        className="px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors"
+                    >
+                        {searching ? 'Searching...' : 'Search'}
+                    </button>
+                    {searchQuery && (
+                        <button
+                            type="button"
+                            onClick={handleClearSearch}
+                            className="px-4 py-2 bg-gray-100 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors"
+                        >
+                            Clear
+                        </button>
+                    )}
+                </form>
             </div>
 
             <div className="overflow-x-auto">
