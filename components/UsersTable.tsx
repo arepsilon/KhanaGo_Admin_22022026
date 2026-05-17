@@ -46,6 +46,23 @@ export default function UsersTable() {
         }
     };
 
+    const handleToggleDefaulterStatus = async (id: string, currentStatus: boolean) => {
+        const action = currentStatus ? 'remove defaulter flag from' : 'mark as defaulter';
+        if (!confirm(`Are you sure you want to ${action} this user?`)) return;
+        try {
+            const { error } = await supabase
+                .from('profiles')
+                .update({ is_defaulter: !currentStatus })
+                .eq('id', id);
+
+            if (error) throw error;
+            fetchUsers();
+        } catch (error: any) {
+            console.error('Error updating defaulter status:', error.message);
+            alert('Failed to update defaulter status');
+        }
+    };
+
     if (loading) {
         return (
             <div className="bg-white rounded-xl shadow-sm p-6">
@@ -76,6 +93,7 @@ export default function UsersTable() {
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">User</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Contact</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tester Status</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Defaulter</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total Orders</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Joined</th>
                         </tr>
@@ -107,6 +125,17 @@ export default function UsersTable() {
                                             }`}
                                     >
                                         {user.is_tester ? '🧪 Tester' : 'Customer'}
+                                    </button>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                    <button
+                                        onClick={() => handleToggleDefaulterStatus(user.id, user.is_defaulter)}
+                                        className={`px-3 py-1 text-xs font-semibold rounded-full transition-colors ${user.is_defaulter
+                                            ? 'bg-red-100 text-red-800 hover:bg-red-200'
+                                            : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                                            }`}
+                                    >
+                                        {user.is_defaulter ? 'Defaulter' : 'Clear'}
                                     </button>
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap">
