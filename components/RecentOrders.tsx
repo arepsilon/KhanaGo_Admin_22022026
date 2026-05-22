@@ -40,7 +40,9 @@ export default function RecentOrders({ startDate, endDate }: { startDate?: strin
                     *,
                     restaurant:restaurants(name),
                     customer:profiles!customer_id(full_name, orders(count))
-                `);
+                `)
+                // Hide UPI orders that haven't completed payment yet.
+                .neq('status', 'awaiting_payment');
 
             if (startDate) {
                 query = query.gte('created_at', `${startDate}T00:00:00Z`);

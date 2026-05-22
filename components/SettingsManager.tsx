@@ -36,17 +36,8 @@ export default function SettingsManager() {
     const [groceryMinimumOrder, setGroceryMinimumOrder] = useState('50');
     const [groceryFreeDeliveryAbove, setGroceryFreeDeliveryAbove] = useState('150');
 
-    // Razorpay State
-    const [razorpayEnabled, setRazorpayEnabled] = useState(false);
-    const [razorpayKeyId, setRazorpayKeyId] = useState('');
-    const [razorpayKeySecret, setRazorpayKeySecret] = useState('');
-
-    // PhonePe State
-    const [phonepeEnabled, setPhonepeEnabled] = useState(false);
-    const [phonepeMerchantId, setPhonepeMerchantId] = useState('');
-    const [phonepeSaltKey, setPhonepeSaltKey] = useState('');
-    const [phonepeSaltIndex, setPhonepeSaltIndex] = useState('1');
-    const [phonepeEnvironment, setPhonepeEnvironment] = useState<'UAT' | 'PRODUCTION'>('UAT');
+    // COD State
+    const [codEnabled, setCodEnabled] = useState(true);
 
     const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
@@ -102,9 +93,6 @@ export default function SettingsManager() {
                 const kmFee = data.find(s => s.key === 'per_km_fee')?.value;
                 const platFee = data.find(s => s.key === 'platform_fee')?.value;
 
-                const rpEnabled = data.find(s => s.key === 'razorpay_enabled')?.value;
-                const rpKeyId = data.find(s => s.key === 'razorpay_key_id')?.value;
-                const rpSecret = data.find(s => s.key === 'razorpay_key_secret')?.value;
                 const menuImages = data.find(s => s.key === 'show_menu_images')?.value;
                 const waNumber = data.find(s => s.key === 'whatsapp_support_url')?.value;
                 // maintenance_mode is always global (city_id = null) — skip it here, fetched separately below
@@ -132,21 +120,9 @@ export default function SettingsManager() {
                 if (grocMin !== undefined) setGroceryMinimumOrder(String(grocMin));
                 if (grocFree !== undefined) setGroceryFreeDeliveryAbove(String(grocFree));
 
-                if (rpEnabled !== undefined) setRazorpayEnabled(Boolean(rpEnabled));
-                if (rpKeyId !== undefined) setRazorpayKeyId(String(rpKeyId).replace(/"/g, ''));
-                if (rpSecret !== undefined) setRazorpayKeySecret(String(rpSecret).replace(/"/g, ''));
-
-                const ppEnabled = data.find(s => s.key === 'phonepe_enabled')?.value;
-                const ppMerchantId = data.find(s => s.key === 'phonepe_merchant_id')?.value;
-                const ppSaltKey = data.find(s => s.key === 'phonepe_salt_key')?.value;
-                const ppSaltIndex = data.find(s => s.key === 'phonepe_salt_index')?.value;
-                const ppEnvironment = data.find(s => s.key === 'phonepe_environment')?.value;
-
-                if (ppEnabled !== undefined) setPhonepeEnabled(Boolean(ppEnabled));
-                if (ppMerchantId !== undefined) setPhonepeMerchantId(String(ppMerchantId).replace(/"/g, ''));
-                if (ppSaltKey !== undefined) setPhonepeSaltKey(String(ppSaltKey).replace(/"/g, ''));
-                if (ppSaltIndex !== undefined) setPhonepeSaltIndex(String(ppSaltIndex).replace(/"/g, ''));
-                if (ppEnvironment !== undefined) setPhonepeEnvironment(String(ppEnvironment).replace(/"/g, '') as 'UAT' | 'PRODUCTION');
+                const cod = data.find(s => s.key === 'enable_cod')?.value;
+                // Default to true if not yet set in DB
+                if (cod !== undefined) setCodEnabled(Boolean(cod));
 
                 if (sActive !== undefined) setIsSurgeActive(Boolean(sActive));
                 if (sFee !== undefined) setSurgeFee(String(sFee));
@@ -192,17 +168,8 @@ export default function SettingsManager() {
                 { key: 'grocery_minimum_order', value: parseFloat(groceryMinimumOrder) || 0, description: 'Minimum order amount for grocery', city_id: selectedCityId },
                 { key: 'grocery_free_delivery_above', value: parseFloat(groceryFreeDeliveryAbove) || 0, description: 'Free delivery threshold for grocery', city_id: selectedCityId },
 
-                // Razorpay
-                { key: 'razorpay_enabled', value: razorpayEnabled, description: 'Enable Razorpay payment gateway', city_id: selectedCityId },
-                { key: 'razorpay_key_id', value: JSON.stringify(razorpayKeyId), description: 'Razorpay Key ID', city_id: selectedCityId },
-                { key: 'razorpay_key_secret', value: JSON.stringify(razorpayKeySecret), description: 'Razorpay Key Secret', city_id: selectedCityId },
-
-                // PhonePe
-                { key: 'phonepe_enabled', value: phonepeEnabled, description: 'Enable PhonePe payment gateway', city_id: selectedCityId },
-                { key: 'phonepe_merchant_id', value: JSON.stringify(phonepeMerchantId), description: 'PhonePe Merchant ID', city_id: selectedCityId },
-                { key: 'phonepe_salt_key', value: JSON.stringify(phonepeSaltKey), description: 'PhonePe Salt Key', city_id: selectedCityId },
-                { key: 'phonepe_salt_index', value: JSON.stringify(phonepeSaltIndex), description: 'PhonePe Salt Index', city_id: selectedCityId },
-                { key: 'phonepe_environment', value: JSON.stringify(phonepeEnvironment), description: 'PhonePe Environment (UAT or PRODUCTION)', city_id: selectedCityId },
+                // COD
+                { key: 'enable_cod', value: codEnabled, description: 'Allow customers to pay cash on delivery', city_id: selectedCityId },
 
                 // Menu Image update
                 { key: 'show_menu_images', value: showMenuImages, description: 'Toggle visibility of menu item images in the customer app', city_id: selectedCityId },
@@ -504,115 +471,25 @@ export default function SettingsManager() {
                     </label>
                 </div>
 
-                {/* Razorpay Settings */}
+                {/* Payment Configuration */}
                 <div className="mt-6 border-t border-slate-100 pt-6">
                     <h3 className="text-lg font-bold text-slate-900 mb-4">Payment Configuration</h3>
 
-                    <div className="flex items-center justify-between p-4 rounded-xl border border-slate-100 bg-slate-50 mb-4">
+                    <div className="flex items-center justify-between p-4 rounded-xl border border-slate-100 bg-slate-50">
                         <div>
-                            <h3 className="font-semibold text-slate-900">Enable Razorpay</h3>
-                            <p className="text-sm text-slate-500">Allow customers to pay online via Razorpay</p>
+                            <h3 className="font-semibold text-slate-900">Enable Cash on Delivery (COD)</h3>
+                            <p className="text-sm text-slate-500">When off, customers can only pay via UPI</p>
                         </div>
                         <label className="relative inline-flex items-center cursor-pointer">
                             <input
                                 type="checkbox"
-                                checked={razorpayEnabled}
-                                onChange={(e) => setRazorpayEnabled(e.target.checked)}
+                                checked={codEnabled}
+                                onChange={(e) => setCodEnabled(e.target.checked)}
                                 className="sr-only peer"
                             />
                             <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500"></div>
                         </label>
                     </div>
-
-                    {razorpayEnabled && (
-                        <div className="space-y-4">
-                            <div className="space-y-2">
-                                <label className="block text-sm font-semibold text-slate-900">Razorpay Key ID</label>
-                                <input
-                                    type="text"
-                                    value={razorpayKeyId}
-                                    onChange={(e) => setRazorpayKeyId(e.target.value)}
-                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all font-medium"
-                                    placeholder="rzp_test_..."
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="block text-sm font-semibold text-slate-900">Razorpay Key Secret</label>
-                                <input
-                                    type="password"
-                                    value={razorpayKeySecret}
-                                    onChange={(e) => setRazorpayKeySecret(e.target.value)}
-                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all font-medium"
-                                    placeholder="Enter key secret"
-                                />
-                            </div>
-                        </div>
-                    )}
-
-                    {/* PhonePe Settings */}
-                    <div className="flex items-center justify-between p-4 rounded-xl border border-slate-100 bg-slate-50 mb-4 mt-4">
-                        <div>
-                            <h3 className="font-semibold text-slate-900">Enable PhonePe</h3>
-                            <p className="text-sm text-slate-500">Allow customers to pay online via PhonePe</p>
-                        </div>
-                        <label className="relative inline-flex items-center cursor-pointer">
-                            <input
-                                type="checkbox"
-                                checked={phonepeEnabled}
-                                onChange={(e) => setPhonepeEnabled(e.target.checked)}
-                                className="sr-only peer"
-                            />
-                            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500"></div>
-                        </label>
-                    </div>
-
-                    {phonepeEnabled && (
-                        <div className="space-y-4">
-                            <div className="space-y-2">
-                                <label className="block text-sm font-semibold text-slate-900">Merchant ID</label>
-                                <input
-                                    type="text"
-                                    value={phonepeMerchantId}
-                                    onChange={(e) => setPhonepeMerchantId(e.target.value)}
-                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium"
-                                    placeholder="e.g. KHANAGOONLINE"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="block text-sm font-semibold text-slate-900">Salt Key</label>
-                                <input
-                                    type="password"
-                                    value={phonepeSaltKey}
-                                    onChange={(e) => setPhonepeSaltKey(e.target.value)}
-                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium"
-                                    placeholder="Enter salt key"
-                                />
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <label className="block text-sm font-semibold text-slate-900">Salt Index</label>
-                                    <input
-                                        type="text"
-                                        value={phonepeSaltIndex}
-                                        onChange={(e) => setPhonepeSaltIndex(e.target.value)}
-                                        className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium"
-                                        placeholder="1"
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="block text-sm font-semibold text-slate-900">Environment</label>
-                                    <select
-                                        value={phonepeEnvironment}
-                                        onChange={(e) => setPhonepeEnvironment(e.target.value as 'UAT' | 'PRODUCTION')}
-                                        className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium bg-white"
-                                    >
-                                        <option value="UAT">UAT (Testing)</option>
-                                        <option value="PRODUCTION">Production</option>
-                                    </select>
-                                </div>
-                            </div>
-                        </div>
-                    )}
                 </div>
 
                 <div className="pt-4">

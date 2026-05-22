@@ -22,36 +22,46 @@ export default function RealtimeAlerts() {
         // Check if alerts are enabled
         checkAlertsEnabled();
 
-        // Subscribe to new orders
+        const emitAlert = async (row: any) => {
+            if (!alertsEnabled) return;
+            const { data: restaurant } = await supabase
+                .from('restaurants')
+                .select('name')
+                .eq('id', row.restaurant_id)
+                .single();
+
+            const newAlert: OrderAlert = {
+                id: row.id,
+                order_number: row.order_number || row.id.slice(0, 8),
+                restaurant_name: restaurant?.name || 'Unknown',
+                total: row.total || 0,
+                created_at: row.created_at,
+            };
+
+            setAlerts(prev => [newAlert, ...prev].slice(0, 5));
+            playNotificationSound();
+        };
+
+        // Alert on actionable orders only:
+        // - INSERT with status='pending' (COD orders go straight to pending)
+        // - UPDATE awaiting_payment -> pending (UPI payment just confirmed)
         const channel = supabase
             .channel('admin_order_alerts')
             .on(
                 'postgres_changes',
-                {
-                    event: 'INSERT',
-                    schema: 'public',
-                    table: 'orders',
-                },
-                async (payload) => {
-                    if (!alertsEnabled) return;
-
-                    // Fetch restaurant name
-                    const { data: restaurant } = await supabase
-                        .from('restaurants')
-                        .select('name')
-                        .eq('id', payload.new.restaurant_id)
-                        .single();
-
-                    const newAlert: OrderAlert = {
-                        id: payload.new.id,
-                        order_number: payload.new.order_number || payload.new.id.slice(0, 8),
-                        restaurant_name: restaurant?.name || 'Unknown',
-                        total: payload.new.total || 0,
-                        created_at: payload.new.created_at,
-                    };
-
-                    setAlerts(prev => [newAlert, ...prev].slice(0, 5)); // Keep last 5
-                    playNotificationSound();
+                { event: 'INSERT', schema: 'public', table: 'orders' },
+                (payload) => {
+                    if (payload.new.status !== 'pending') return;
+                    emitAlert(payload.new);
+                }
+            )
+            .on(
+                'postgres_changes',
+                { event: 'UPDATE', schema: 'public', table: 'orders' },
+                (payload) => {
+                    if (payload.old?.status === 'awaiting_payment' && payload.new.status === 'pending') {
+                        emitAlert(payload.new);
+                    }
                 }
             )
             .subscribe();

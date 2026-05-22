@@ -220,6 +220,9 @@ export default function OrdersTable() {
                     rider:profiles!rider_id(full_name, phone)
                 )
             `)
+            // Hide UPI orders that haven't completed payment yet. Once PayU's
+            // webhook confirms payment, status flips to 'pending' and they appear.
+            .neq('status', 'awaiting_payment')
             .order('created_at', { ascending: false });
 
         if (cityFilter !== 'all') {
