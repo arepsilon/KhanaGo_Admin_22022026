@@ -738,33 +738,61 @@ export default function ReconciliationRestaurantTab({ dateRange }: { dateRange: 
                 .select('id, name, platform_fee_per_order, transaction_charge_percent, payment_mode, upi_id, bank_account_name, bank_account_number, bank_ifsc_code, bank_name, whatsapp_number');
             if (restErr) throw restErr;
 
-            const { data: orders, error: ordErr } = await supabase
-                .from('orders')
-                .select(`
-                    id,
-                    order_number,
-                    restaurant_id,
-                    subtotal,
-                    total,
-                    platform_fee,
-                    delivery_fee,
-                    created_at,
-                    status,
-                    order_items(quantity, unit_price, base_price, menu_item:menu_items(name))
-                `)
-                .in('status', ['delivered', 'completed', 'wastage'])
-                .gte('created_at', '2026-04-09T00:00:00.000Z')
-                .limit(10000);
-            if (ordErr) throw ordErr;
+            // Paginated fetch — Supabase PostgREST silently caps single requests at 1,000 rows
+            // even when .limit(10000) is set, causing recent orders to be dropped.
+            const step = 1000;
+            let orders: any[] = [];
+            {
+                let from = 0;
+                while (true) {
+                    const { data: chunk, error: ordErr } = await supabase
+                        .from('orders')
+                        .select(`
+                            id,
+                            order_number,
+                            restaurant_id,
+                            subtotal,
+                            total,
+                            platform_fee,
+                            delivery_fee,
+                            created_at,
+                            status,
+                            order_items(quantity, unit_price, base_price, menu_item:menu_items(name))
+                        `)
+                        .in('status', ['delivered', 'completed', 'wastage'])
+                        .gte('created_at', '2026-04-09T00:00:00.000Z')
+                        .lte('created_at', `${dateRange.end}T23:59:59.999Z`)
+                        .order('created_at', { ascending: true })
+                        .range(from, from + step - 1);
+                    if (ordErr) throw ordErr;
+                    if (!chunk || chunk.length === 0) break;
+                    orders = orders.concat(chunk);
+                    if (chunk.length < step) break;
+                    from += step;
+                }
+            }
 
-            const { data: payouts, error: payErr } = await supabase
-                .from('restaurant_payouts')
-                .select('id, restaurant_id, amount, payout_date, created_at, metadata');
-            if (payErr) console.warn('Could not fetch restaurant payouts', payErr);
-            const safePayouts = payouts || [];
+            let payouts: any[] = [];
+            {
+                let pFrom = 0;
+                while (true) {
+                    const { data: pChunk, error: payErr } = await supabase
+                        .from('restaurant_payouts')
+                        .select('id, restaurant_id, amount, payout_date, created_at, metadata')
+                        .order('created_at', { ascending: true })
+                        .range(pFrom, pFrom + step - 1);
+                    if (payErr) { console.warn('Could not fetch restaurant payouts', payErr); break; }
+                    if (!pChunk || pChunk.length === 0) break;
+                    payouts = payouts.concat(pChunk);
+                    if (pChunk.length < step) break;
+                    pFrom += step;
+                }
+            }
+            const safePayouts = payouts;
 
-            const startUTC = new Date(`${dateRange.start}T00:00:00.000Z`).getTime();
-            const endUTC   = new Date(`${dateRange.end}T23:59:59.999Z`).getTime();
+            // Use local time for day boundaries so IST midnight is respected
+            const startUTC = new Date(`${dateRange.start}T00:00:00`).getTime();
+            const endUTC   = new Date(`${dateRange.end}T23:59:59.999`).getTime();
 
             // New payment terms effective from 9th April 2026.
             // All pre-cutoff earnings/payouts are zeroed out — no legacy dues are carried forward.
